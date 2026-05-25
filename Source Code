@@ -1,21 +1,22 @@
 Option Explicit
 
 Sub CompareShipmentData()
+
     Dim wsOutput As Worksheet, wsDelayTab As Worksheet, wsDashboard As Worksheet
     Dim wbDCT As Workbook, wbKPI As Workbook, wbRateCard As Workbook
     Dim dctFilePath As String, kpiFilePath As String, rcFilePath As String
     Dim targetMonth As Integer, targetYear As Integer
     Dim userInput As String
-    
+
     ' 1. Prompt for Target Month and Year
     userInput = InputBox("Enter the target month and year for validation (MM/YYYY):", "Select Target Month", Format(Date, "mm/yyyy"))
     If userInput = "" Then Exit Sub
-    
+
     ' Fix: Manually parse the input to bypass Windows OS Regional Date bugs
     userInput = Replace(userInput, "-", "/")
     Dim userParts() As String
     userParts = Split(userInput, "/")
-    
+
     If UBound(userParts) = 1 Then
         If IsNumeric(userParts(0)) And IsNumeric(userParts(1)) Then
             targetMonth = CInt(userParts(0))
@@ -28,71 +29,71 @@ Sub CompareShipmentData()
         MsgBox "Invalid date format. Please use MM/YYYY.", vbCritical
         Exit Sub
     End If
-    
+
     ' 2. Prompt for DCT, KPI, and Rate Card Files
     MsgBox "Please select the DCT Data File (API).", vbInformation
     dctFilePath = Application.GetOpenFilename("Excel Files (*.xls*), *.xls*", , "Select DCT Data File")
     If dctFilePath = "False" Then Exit Sub
-    
+
     MsgBox "Please select the LSP KPI Report File.", vbInformation
     kpiFilePath = Application.GetOpenFilename("Excel Files (*.xls*), *.xls*", , "Select LSP KPI Report File")
     If kpiFilePath = "False" Then Exit Sub
-    
+
     MsgBox "Please select the Rate Card File.", vbInformation, "Select Rate Card"
     rcFilePath = Application.GetOpenFilename("Excel Files (*.xls*), *.xls*", , "Select Rate Card File")
     If rcFilePath = "False" Then Exit Sub
-    
+
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
-    
+
     ' ==========================================
     ' 3. SYSTEM-GENERATED FILE WORKAROUND & LOAD
     ' ==========================================
     Application.DisplayAlerts = False
-    
+
     Set wbDCT = OpenWorkbookSafely(dctFilePath)
     If wbDCT Is Nothing Then
         MsgBox "Error: The DCT file could not be loaded.", vbCritical
         GoTo ExitMacro
     End If
-    
+
     Set wbKPI = OpenWorkbookSafely(kpiFilePath)
     If wbKPI Is Nothing Then
         MsgBox "Error: The KPI file could not be loaded.", vbCritical
         wbDCT.Close False
         GoTo ExitMacro
     End If
-    
+
     Set wbRateCard = OpenWorkbookSafely(rcFilePath)
     If wbRateCard Is Nothing Then
         MsgBox "Error: The Rate Card file could not be loaded.", vbCritical
         wbDCT.Close False: wbKPI.Close False
         GoTo ExitMacro
     End If
-    
+
     Application.DisplayAlerts = True
-    
+
     ' ==========================================
     ' 4. LOAD RATE CARD & MAPPINGS
     ' ==========================================
     Dim wsRC As Worksheet, wsDestMap As Worksheet, wsCountryMap As Worksheet
     Set wsRC = wbRateCard.Sheets(1)
-    
+
     On Error Resume Next
     Set wsDestMap = wbRateCard.Sheets("Destination Mapping")
     Set wsCountryMap = wbRateCard.Sheets("Country Code Mapping")
     On Error GoTo 0
-    
+
     If wsDestMap Is Nothing Or wsCountryMap Is Nothing Then
         MsgBox "Error: Mapping sheets not found in the Rate Card.", vbCritical
         wbDCT.Close False: wbKPI.Close False: wbRateCard.Close False
         GoTo ExitMacro
     End If
-    
+
     Dim dictDestMap As Object
     Set dictDestMap = CreateObject("Scripting.Dictionary")
     dictDestMap.CompareMode = vbTextCompare
-    
+
     Dim lrDest As Long, r As Long, arrDest As Variant
     lrDest = wsDestMap.Cells(wsDestMap.Rows.Count, "A").End(xlUp).Row
     If lrDest >= 2 Then
@@ -103,11 +104,11 @@ Sub CompareShipmentData()
             End If
         Next r
     End If
-    
+
     Dim dictCountryMap As Object
     Set dictCountryMap = CreateObject("Scripting.Dictionary")
     dictCountryMap.CompareMode = vbTextCompare
-    
+
     Dim lrCountry As Long, arrCountry As Variant
     lrCountry = wsCountryMap.Cells(wsCountryMap.Rows.Count, "A").End(xlUp).Row
     If lrCountry >= 2 Then
@@ -118,32 +119,50 @@ Sub CompareShipmentData()
             End If
         Next r
     End If
-    
+
     Dim dictRateCard As Object, dictOrigRegs As Object
     Set dictRateCard = CreateObject("Scripting.Dictionary")
     Set dictOrigRegs = CreateObject("Scripting.Dictionary")
     dictRateCard.CompareMode = vbTextCompare
     dictOrigRegs.CompareMode = vbTextCompare
-    
-    Dim c_rcCountry As Long, c_rcOrigReg As Long, c_rcDestReg As Long, c_rcSvc As Long, c_rcDays As Long
+
+    Dim c_rcCountry As Long, c_rcOrigReg As Long, c_rcDestReg As Long, c_rcSvc As Long, c_rcDays As Long, c_rcRate As Long, c_rcCurr As Long
     c_rcCountry = FindExactHeaderCol(wsRC, "1 Origin Country [ISO country code]", 3)
     c_rcOrigReg = FindExactHeaderCol(wsRC, "2 Place/Zone of Origin", 3)
     c_rcDestReg = FindExactHeaderCol(wsRC, "8 Place/Zone of Destination", 3)
     c_rcSvc = FindExactHeaderCol(wsRC, "9 Type of service", 3)
     c_rcDays = FindExactHeaderCol(wsRC, "36.1 Total Transit Time Door-Door [days]", 3)
-    
+
+    Dim rCheck As Long, cCheck As Long, hdrStr As String
+    c_rcRate = 0: c_rcCurr = 0
+    For rCheck = 1 To 5
+        For cCheck = 1 To 150
+            hdrStr = UCase(Replace(Trim(CStr(wsRC.Cells(rCheck, cCheck).Value2)), " ", ""))
+            If c_rcRate = 0 And (InStr(1, hdrStr, "MAINCARRIAGERATE") > 0 Or InStr(1, hdrStr, "MAINCARRIAGE") > 0) Then
+                c_rcRate = cCheck
+            End If
+            If c_rcCurr = 0 And InStr(1, hdrStr, "CURRENCY") > 0 Then
+                c_rcCurr = cCheck
+            End If
+        Next cCheck
+        If c_rcRate > 0 And c_rcCurr > 0 Then Exit For
+    Next rCheck
+
     Dim lrRC As Long
     lrRC = wsRC.Cells(wsRC.Rows.Count, c_rcCountry).End(xlUp).Row
-    Dim rcCountry As String, rcOrig As String, rcDest As String, rcSvc As String, rcDays As Variant
+    Dim rcCountry As String, rcOrig As String, rcDest As String, rcSvc As String, rcDays As Variant, rcRate As Variant, rcCurr As String
     Dim laneKey As String
-    
+
     For r = 2 To lrRC
         rcCountry = Trim(CStr(wsRC.Cells(r, c_rcCountry).Value2))
         rcOrig = Trim(CStr(wsRC.Cells(r, c_rcOrigReg).Value2))
         rcDest = Trim(CStr(wsRC.Cells(r, c_rcDestReg).Value2))
         rcSvc = Trim(CStr(wsRC.Cells(r, c_rcSvc).Value2))
         rcDays = wsRC.Cells(r, c_rcDays).Value2
-        
+
+        If c_rcRate > 0 Then rcRate = wsRC.Cells(r, c_rcRate).Value2 Else rcRate = ""
+        If c_rcCurr > 0 Then rcCurr = Trim(CStr(wsRC.Cells(r, c_rcCurr).Value2)) Else rcCurr = ""
+
         If rcCountry <> "" And rcOrig <> "" Then
             If Not dictOrigRegs.exists(rcCountry) Then dictOrigRegs.Add rcCountry, New Collection
             Dim col As Collection, v As Variant, exists As Boolean
@@ -152,9 +171,9 @@ Sub CompareShipmentData()
                 If CStr(v) = rcOrig Then exists = True: Exit For
             Next v
             If Not exists Then col.Add rcOrig
-            
+
             laneKey = UCase(rcCountry) & "|" & UCase(rcOrig) & "|" & UCase(rcDest) & "|" & CleanSvc(rcSvc)
-            dictRateCard(laneKey) = rcDays
+            dictRateCard(laneKey) = Array(rcDays, rcRate, rcCurr)
         End If
     Next r
     wbRateCard.Close False
@@ -164,7 +183,7 @@ Sub CompareShipmentData()
     ' ==========================================
     Dim wsDCT As Worksheet
     Set wsDCT = wbDCT.Sheets(1)
-    
+
     Dim lastRowDCT As Long
     lastRowDCT = wsDCT.Cells(wsDCT.Rows.Count, "B").End(xlUp).Row
     If lastRowDCT < 2 Then
@@ -172,23 +191,23 @@ Sub CompareShipmentData()
         wbDCT.Close False: wbKPI.Close False
         GoTo ExitMacro
     End If
-    
+
     Dim arrDCT As Variant
     arrDCT = wsDCT.Range(wsDCT.Cells(1, 1), wsDCT.Cells(lastRowDCT, 150)).Value2
-    
+
     Dim wsKPI As Worksheet, wsDelayCodes As Worksheet
     Dim ws As Worksheet
     For Each ws In wbKPI.Sheets
         If UCase(Trim(ws.Name)) Like "*A) WORKSHEET*" Then Set wsKPI = ws
         If UCase(Trim(ws.Name)) Like "*DELAY CODES*" Then Set wsDelayCodes = ws
     Next ws
-    
+
     If wsKPI Is Nothing Then
         MsgBox "Sheet 'A) Worksheet' could not be found in the KPI Report.", vbCritical
         wbDCT.Close False: wbKPI.Close False
         GoTo ExitMacro
     End If
-    
+
     Dim lastRowKPI As Long
     lastRowKPI = wsKPI.Cells(wsKPI.Rows.Count, "B").End(xlUp).Row
     If lastRowKPI < 6 Then
@@ -196,20 +215,20 @@ Sub CompareShipmentData()
         wbDCT.Close False: wbKPI.Close False
         GoTo ExitMacro
     End If
-    
+
     Dim arrKPI As Variant
     arrKPI = wsKPI.Range(wsKPI.Cells(1, 1), wsKPI.Cells(lastRowKPI, 150)).Value2
-    
+
     ' ==============================================================
     ' 6. FULLY DYNAMIC HYBRID COLUMN MAPPING
     ' ==============================================================
     Dim c_dctHAWB As Long, c_dctPOD As Long, c_dctSVC As Long, c_dctAPD As Long
     Dim c_dctSC As Long, c_dctATD As Long, c_dctATA As Long, c_dctTransit As Long, c_dctHOB As Long
-    
+
     Dim c_kpiHAWB As Long, c_kpiPOD As Long, c_kpiSVC As Long, c_kpiAPD As Long
     Dim c_kpiSC As Long, c_kpiATD As Long, c_kpiATA As Long, c_kpiTransit As Long, c_kpiDCode As Long
-    Dim c_kpiCountry As Long, c_kpiPostCode As Long, c_kpiDestCity As Long, c_kpiOnTime As Long, c_kpiHOB As Long
-    
+    Dim c_kpiCountry As Long, c_kpiPostCode As Long, c_kpiDestCity As Long, c_kpiOnTime As Long, c_kpiHOB As Long, c_kpiWeight As Long
+
     c_dctHAWB = FindSmartHeaderCol(wsDCT, "HAWB", 2, False)
     c_dctSVC = FindSmartHeaderCol(wsDCT, "SVC", 2, False)
     c_dctAPD = FindSmartHeaderCol(wsDCT, "APD", 2, True)
@@ -220,7 +239,7 @@ Sub CompareShipmentData()
     c_dctPOD = FindSmartHeaderCol(wsDCT, "POD", 2, True)
     c_dctTransit = FindSmartHeaderCol(wsDCT, "TRANSIT", 2, False)
     c_dctHOB = FindExactHeaderCol(wsDCT, "Handover to Broker Date", 2)
-    
+
     c_kpiHAWB = FindSmartHeaderCol(wsKPI, "HAWB", 6, False)
     c_kpiSVC = FindSmartHeaderCol(wsKPI, "SVC", 6, False)
     c_kpiAPD = FindSmartHeaderCol(wsKPI, "APD", 6, True)
@@ -234,34 +253,46 @@ Sub CompareShipmentData()
     c_kpiOnTime = FindExactHeaderCol(wsKPI, "Shipment On Time", 6)
     c_kpiHOB = FindExactHeaderCol(wsKPI, "Handover to Brooker", 6)
     If c_kpiHOB = 0 Then c_kpiHOB = FindExactHeaderCol(wsKPI, "Handover to Broker", 6)
-    
+
     c_kpiCountry = FindExactHeaderCol(wsKPI, "Origin Country", 6)
     c_kpiPostCode = FindExactHeaderCol(wsKPI, "Origin Post Code", 6)
     c_kpiDestCity = FindExactHeaderCol(wsKPI, "Destination City", 6)
-    
+
+    c_kpiWeight = 0
+    For rCheck = 1 To 7
+        For cCheck = 1 To 150
+            hdrStr = UCase(Replace(Trim(CStr(wsKPI.Cells(rCheck, cCheck).Value2)), " ", ""))
+            If InStr(1, hdrStr, "CHARGEABLEWEIGHT") > 0 Then
+                c_kpiWeight = cCheck
+                Exit For
+            End If
+        Next cCheck
+        If c_kpiWeight > 0 Then Exit For
+    Next rCheck
+
     If c_dctHAWB = 0 Or c_kpiHAWB = 0 Or c_dctPOD = 0 Or c_kpiPOD = 0 Then
         MsgBox "Critical Error: Could not dynamically locate the HAWB or POD columns.", vbCritical
         wbDCT.Close False: wbKPI.Close False
         GoTo ExitMacro
     End If
-    
+
     Dim dictAPI As Object, dictKPI As Object
     Set dictAPI = CreateObject("Scripting.Dictionary"): dictAPI.CompareMode = vbTextCompare
     Set dictKPI = CreateObject("Scripting.Dictionary"): dictKPI.CompareMode = vbTextCompare
-    
+
     Dim dictSeenCodes As Object
     Set dictSeenCodes = CreateObject("Scripting.Dictionary"): dictSeenCodes.CompareMode = vbTextCompare
-    
+
     ' ==============================================================
     ' 6b. DYNAMIC DELAY CODES, REASON & ACCOUNTABLE MAPPING
     ' ==============================================================
     Dim dictDelayCodes As Object
     Set dictDelayCodes = CreateObject("Scripting.Dictionary"): dictDelayCodes.CompareMode = vbTextCompare
-    
+
     If Not wsDelayCodes Is Nothing Then
         Dim headerRowMap As Long, rMap As Long, cMap As Long
         Dim c_mapDelayCode As Long, c_mapReason As Long, c_mapAcc As Long, c_mapStatus As Long
-        
+
         headerRowMap = 1
         For rMap = 1 To 15
             For cMap = 1 To 20
@@ -274,7 +305,7 @@ Sub CompareShipmentData()
             Next cMap
             If headerRowMap > 1 Then Exit For
         Next rMap
-        
+
         For cMap = 1 To 30
             cellValMap = UCase(Trim(CStr(wsDelayCodes.Cells(headerRowMap, cMap).Value)))
             If cellValMap Like "*DELAY CODE*" Or cellValMap = "EXCEPTION CODE" Then c_mapDelayCode = cMap
@@ -282,13 +313,13 @@ Sub CompareShipmentData()
             If cellValMap Like "FOLLOW-UP WITH*" Or cellValMap Like "FOLLOW UP WITH*" Then c_mapAcc = cMap
             If cellValMap Like "*CHARGEAB*" Or cellValMap = "STATUS" Then c_mapStatus = cMap
         Next cMap
-        
+
         If c_mapDelayCode = 0 Then c_mapDelayCode = 1
         If c_mapStatus = 0 Then c_mapStatus = 4
-        
+
         Dim lastRowDelayMap As Long, d As Long
         lastRowDelayMap = wsDelayCodes.Cells(wsDelayCodes.Rows.Count, c_mapDelayCode).End(xlUp).Row
-        
+
         If lastRowDelayMap > headerRowMap Then
             For d = headerRowMap + 1 To lastRowDelayMap
                 Dim dKey As String
@@ -298,13 +329,13 @@ Sub CompareShipmentData()
                     If c_mapStatus > 0 Then vStatus = Trim(CStr(wsDelayCodes.Cells(d, c_mapStatus).Value)) Else vStatus = ""
                     If c_mapReason > 0 Then vReason = Trim(CStr(wsDelayCodes.Cells(d, c_mapReason).Value)) Else vReason = ""
                     If c_mapAcc > 0 Then vAcc = Trim(CStr(wsDelayCodes.Cells(d, c_mapAcc).Value)) Else vAcc = ""
-                    
+
                     dictDelayCodes(dKey) = Array(vStatus, vReason, vAcc)
                 End If
             Next d
         End If
     End If
-    
+
     Dim i As Long
     Dim podDate As Date, filterDate As Date, tempSC As Date, tempAPD As Date, tempATD As Date, tempATA As Date
     Dim tempHOB As Date
@@ -312,7 +343,7 @@ Sub CompareShipmentData()
     Dim transitTime As Long, dCode As String
     Dim apiCount As Long, kpiCount As Long
     apiCount = 0: kpiCount = 0
-    
+
     ' 7. Process DCT (API) Data
     For i = 2 To UBound(arrDCT, 1)
         hawb = Trim(CStr(GetSafeArrayVal(arrDCT, i, c_dctHAWB)))
@@ -320,10 +351,10 @@ Sub CompareShipmentData()
             podDate = ParseSafeDate(GetSafeArrayVal(arrDCT, i, c_dctPOD))
             tempHOB = 0
             If c_dctHOB > 0 Then tempHOB = ParseSafeDate(GetSafeArrayVal(arrDCT, i, c_dctHOB))
-            
+
             filterDate = podDate
             If filterDate = 0 And tempHOB > 0 Then filterDate = tempHOB
-            
+
             If filterDate > 0 And Month(filterDate) = targetMonth And Year(filterDate) = targetYear Then
                 apiCount = apiCount + 1
                 svc = Trim(CStr(GetSafeArrayVal(arrDCT, i, c_dctSVC)))
@@ -335,30 +366,30 @@ Sub CompareShipmentData()
                 If tempATD > 0 Then atd = tempATD Else atd = ""
                 tempATA = ParseSafeDate(GetSafeArrayVal(arrDCT, i, c_dctATA))
                 If tempATA > 0 Then ata = tempATA Else ata = ""
-                
+
                 transitTime = 0
                 Dim ttVal As Variant
                 ttVal = GetSafeArrayVal(arrDCT, i, c_dctTransit)
                 If IsNumeric(ttVal) And Not IsEmpty(ttVal) Then transitTime = CLng(ttVal)
-                
+
                 dictAPI(hawb) = Array(svc, apd, sc, podDate, transitTime, tempSC, atd, ata, tempHOB)
             End If
         End If
     Next i
-    
+
     ' 8. Process KPI Data
-    Dim kCountry As String, kPost As String, kCity As String, kOnTime As String
-    
+    Dim kCountry As String, kPost As String, kCity As String, kOnTime As String, kpiWeight As Variant
+
     For i = 6 To UBound(arrKPI, 1)
         hawb = Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiHAWB)))
         If hawb <> "" Then
             podDate = ParseSafeDate(GetSafeArrayVal(arrKPI, i, c_kpiPOD))
             tempHOB = 0
             If c_kpiHOB > 0 Then tempHOB = ParseSafeDate(GetSafeArrayVal(arrKPI, i, c_kpiHOB))
-            
+
             filterDate = podDate
             If filterDate = 0 And tempHOB > 0 Then filterDate = tempHOB
-            
+
             If filterDate > 0 And Month(filterDate) = targetMonth And Year(filterDate) = targetYear Then
                 kpiCount = kpiCount + 1
                 svc = Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiSVC)))
@@ -370,15 +401,15 @@ Sub CompareShipmentData()
                 If tempATD > 0 Then atd = tempATD Else atd = ""
                 tempATA = ParseSafeDate(GetSafeArrayVal(arrKPI, i, c_kpiATA))
                 If tempATA > 0 Then ata = tempATA Else ata = ""
-                
+
                 transitTime = 0
                 ttVal = GetSafeArrayVal(arrKPI, i, c_kpiTransit)
                 If IsNumeric(ttVal) And Not IsEmpty(ttVal) Then transitTime = CLng(ttVal)
-                
+
                 dCode = ""
                 If Not IsError(GetSafeArrayVal(arrKPI, i, c_kpiDCode)) Then dCode = Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiDCode)))
-                
-                kCountry = "": kPost = "": kCity = "": kOnTime = ""
+
+                kCountry = "": kPost = "": kCity = "": kOnTime = "": kpiWeight = ""
                 If c_kpiCountry > 0 Then kCountry = Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiCountry)))
                 If c_kpiPostCode > 0 Then
                     kPost = Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiPostCode)))
@@ -386,59 +417,61 @@ Sub CompareShipmentData()
                 End If
                 If c_kpiDestCity > 0 Then kCity = Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiDestCity)))
                 If c_kpiOnTime > 0 Then kOnTime = UCase(Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiOnTime))))
-                
-                dictKPI(hawb) = Array(svc, apd, sc, podDate, transitTime, dCode, tempSC, atd, ata, kCountry, kPost, kCity, kOnTime, tempHOB)
+
+                If c_kpiWeight > 0 Then kpiWeight = GetSafeArrayVal(arrKPI, i, c_kpiWeight)
+
+                dictKPI(hawb) = Array(svc, apd, sc, podDate, transitTime, dCode, tempSC, atd, ata, kCountry, kPost, kCity, kOnTime, tempHOB, kpiWeight)
             End If
         End If
     Next i
-    
+
     wbDCT.Close False: wbKPI.Close False
-    
+
     If kpiCount = 0 Then
         Application.ScreenUpdating = True
         Application.Calculation = xlCalculationAutomatic
         MsgBox "Error: The KPI report contains no valid dates for " & userInput & ".", vbExclamation, "Data Parsing Error"
         Exit Sub
     End If
-    
+
     ' 9. Compare and Compile Output
     Dim outMissing() As Variant, outSvc() As Variant, outSC() As Variant, outDelay() As Variant
     Dim outAPD() As Variant, outATD() As Variant, outATA() As Variant, outPOD() As Variant
-    
+
     Dim hasAnyAirShipment As Boolean
     hasAnyAirShipment = False
-    
+
     ReDim outMissing(1 To WorksheetFunction.Max(dictAPI.Count, dictKPI.Count) + 1, 1 To 2)
     ReDim outSvc(1 To dictAPI.Count + 1, 1 To 4)
     ReDim outSC(1 To dictAPI.Count + 1, 1 To 4)
-    ReDim outDelay(1 To dictAPI.Count + 1, 1 To 19) ' Array maintains full width initially
+    ReDim outDelay(1 To dictAPI.Count + 1, 1 To 23)
     ReDim outAPD(1 To dictAPI.Count + 1, 1 To 4)
     ReDim outATD(1 To dictAPI.Count + 1, 1 To 4)
     ReDim outATA(1 To dictAPI.Count + 1, 1 To 4)
     ReDim outPOD(1 To dictAPI.Count + 1, 1 To 4)
-    
+
     Dim mRow As Long, sRow As Long, cRow As Long, dRow As Long
     Dim aRow As Long, tRow As Long, rRow As Long, pRow As Long
     mRow = 1: sRow = 1: cRow = 1: dRow = 1: aRow = 1: tRow = 1: rRow = 1: pRow = 1
-    
+
     Dim key As Variant, apiVals As Variant, kpiVals As Variant
     Dim apiSvc As String, kpiSvc As String
     Dim apiAPD As Variant, kpiAPD As Variant, apiSC As Variant, kpiSC As Variant
     Dim apiATD As Variant, kpiATD As Variant, apiATA As Variant, kpiATA As Variant
     Dim apiPODDate As Date, kpiPODDate As Date, kpiDCode As String
     Dim apiHOBDate As Date, kpiHOBDate As Date
-    Dim apiSCDate As Date
+    Dim apiSCDate As Date, kWeight As Variant
     Dim isApiDelay As Boolean, isKpiDelay As Boolean
     Dim apiCompareDate As Date, kpiCompareDate As Date
     Dim apiDateType As String, kpiDateType As String
-    
+
     For Each key In dictAPI.Keys
         apiVals = dictAPI(key)
         apiSvc = apiVals(0): apiAPD = apiVals(1): apiSC = apiVals(2)
         apiPODDate = apiVals(3): apiSCDate = apiVals(5)
         apiATD = apiVals(6): apiATA = apiVals(7)
         apiHOBDate = apiVals(8)
-        
+
         If apiPODDate > 0 Then
             apiCompareDate = apiPODDate: apiDateType = "POD"
         ElseIf apiHOBDate > 0 Then
@@ -446,7 +479,7 @@ Sub CompareShipmentData()
         Else
             apiCompareDate = 0: apiDateType = "Missing"
         End If
-        
+
         If Not dictKPI.exists(key) Then
             outMissing(mRow, 1) = key
             mRow = mRow + 1
@@ -455,11 +488,12 @@ Sub CompareShipmentData()
             kpiSvc = kpiVals(0): kpiAPD = kpiVals(1): kpiSC = kpiVals(2)
             kpiPODDate = kpiVals(3): kpiDCode = kpiVals(5)
             kpiATD = kpiVals(7): kpiATA = kpiVals(8)
-            
+
             Dim kCountryName As String, kPostName As String, kCityName As String, kOnTimeFlag As String
             kCountryName = kpiVals(9): kPostName = kpiVals(10): kCityName = kpiVals(11): kOnTimeFlag = kpiVals(12)
             kpiHOBDate = kpiVals(13)
-            
+            kWeight = kpiVals(14)
+
             If kpiPODDate > 0 Then
                 kpiCompareDate = kpiPODDate: kpiDateType = "POD"
             ElseIf kpiHOBDate > 0 Then
@@ -467,11 +501,11 @@ Sub CompareShipmentData()
             Else
                 kpiCompareDate = 0: kpiDateType = "Missing"
             End If
-            
+
             Dim cleanApiSvc As String, cleanKpiSvc As String
             cleanApiSvc = CleanSvc(apiSvc)
             cleanKpiSvc = CleanSvc(kpiSvc)
-            
+
             If cleanApiSvc <> cleanKpiSvc Then
                 outSvc(sRow, 1) = key
                 outSvc(sRow, 2) = Trim(Replace(apiSvc, "Service", "", 1, -1, vbTextCompare))
@@ -479,7 +513,7 @@ Sub CompareShipmentData()
                 outSvc(sRow, 4) = "Mismatch"
                 sRow = sRow + 1
             End If
-            
+
             If apiAPD = "" And kpiAPD <> "" Then
                 outAPD(aRow, 1) = key: outAPD(aRow, 2) = apiAPD: outAPD(aRow, 3) = kpiAPD: outAPD(aRow, 4) = "Missing in API": aRow = aRow + 1
             ElseIf apiAPD <> "" And kpiAPD = "" Then
@@ -487,7 +521,7 @@ Sub CompareShipmentData()
             ElseIf apiAPD <> "" And kpiAPD <> "" Then
                 If Abs(apiAPD - kpiAPD) >= 3 Then outAPD(aRow, 1) = key: outAPD(aRow, 2) = apiAPD: outAPD(aRow, 3) = kpiAPD: outAPD(aRow, 4) = "Mismatch": aRow = aRow + 1
             End If
-            
+
             If apiATD = "" And kpiATD <> "" Then
                 outATD(tRow, 1) = key: outATD(tRow, 2) = apiATD: outATD(tRow, 3) = kpiATD: outATD(tRow, 4) = "Missing in API": tRow = tRow + 1
             ElseIf apiATD <> "" And kpiATD = "" Then
@@ -495,7 +529,7 @@ Sub CompareShipmentData()
             ElseIf apiATD <> "" And kpiATD <> "" Then
                 If Abs(apiATD - kpiATD) >= 3 Then outATD(tRow, 1) = key: outATD(tRow, 2) = apiATD: outATD(tRow, 3) = kpiATD: outATD(tRow, 4) = "Mismatch": tRow = tRow + 1
             End If
-            
+
             If apiATA = "" And kpiATA <> "" Then
                 outATA(rRow, 1) = key: outATA(rRow, 2) = apiATA: outATA(rRow, 3) = kpiATA: outATA(rRow, 4) = "Missing in API": rRow = rRow + 1
             ElseIf apiATA <> "" And kpiATA = "" Then
@@ -503,9 +537,9 @@ Sub CompareShipmentData()
             ElseIf apiATA <> "" And kpiATA <> "" Then
                 If Abs(apiATA - kpiATA) >= 3 Then outATA(rRow, 1) = key: outATA(rRow, 2) = apiATA: outATA(rRow, 3) = kpiATA: outATA(rRow, 4) = "Mismatch": rRow = rRow + 1
             End If
-            
+
             Dim hasPODDisc As Boolean: hasPODDisc = False
-            
+
             If apiCompareDate = 0 And kpiCompareDate > 0 Then
                 outPOD(pRow, 1) = key: outPOD(pRow, 2) = "Missing": outPOD(pRow, 3) = kpiCompareDate: outPOD(pRow, 4) = "Missing in API": pRow = pRow + 1
                 hasPODDisc = True
@@ -524,7 +558,7 @@ Sub CompareShipmentData()
                     hasPODDisc = True
                 End If
             End If
-            
+
             Dim hasSCDisc As Boolean: hasSCDisc = False
             If apiSC = "" And kpiSC <> "" Then
                 outSC(cRow, 1) = key: outSC(cRow, 2) = apiSC: outSC(cRow, 3) = kpiSC: outSC(cRow, 4) = "Missing in API": cRow = cRow + 1
@@ -538,9 +572,9 @@ Sub CompareShipmentData()
                     hasSCDisc = True
                 End If
             End If
-            
+
             Dim derivedCountryCode As String, derivedDest As String, derivedOrig As String
-            
+
             If Len(kCountryName) = 2 Then
                 derivedCountryCode = UCase(kCountryName)
             ElseIf dictCountryMap.exists(LCase(kCountryName)) Then
@@ -548,31 +582,48 @@ Sub CompareShipmentData()
             Else
                 derivedCountryCode = "Unmapped Country"
             End If
-            
+
             derivedDest = "Unmapped City"
             If dictDestMap.exists(LCase(kCityName)) Then derivedDest = dictDestMap(LCase(kCityName))
-            
+
             derivedOrig = GetOriginRegion(derivedCountryCode, kPostName, dictOrigRegs)
             laneKey = UCase(derivedCountryCode) & "|" & UCase(derivedOrig) & "|" & UCase(derivedDest) & "|" & CleanSvc(kpiSvc)
-            
-            Dim contractedDays As Variant, contractedDate As Variant
+
+            Dim contractedDays As Variant, contractedRate As Variant, contractedCurr As String, contractedDate As Variant
             contractedDate = Empty
-            
+
             If dictRateCard.exists(laneKey) Then
-                contractedDays = dictRateCard(laneKey)
+                contractedDays = dictRateCard(laneKey)(0)
+                contractedRate = dictRateCard(laneKey)(1)
+                contractedCurr = dictRateCard(laneKey)(2)
                 If IsNumeric(contractedDays) And apiSCDate > 0 Then
                     contractedDate = CDbl(apiSCDate) + CDbl(contractedDays) - 1
                 End If
             Else
                 contractedDays = "Lane Not Available"
+                contractedRate = 0
+                contractedCurr = ""
             End If
-            
+
+            Dim cleanRate As Variant, cleanWeight As Variant
+            cleanRate = ExtractNumeric(contractedRate)
+            cleanWeight = ExtractNumeric(kWeight)
+
+            Dim baseAmt As Variant, payableAmt As Variant, penaltyAmt As Variant
+            baseAmt = ""
+            payableAmt = ""
+            penaltyAmt = ""
+
+            If IsNumeric(cleanWeight) And IsNumeric(cleanRate) Then
+                baseAmt = CDbl(cleanWeight) * CDbl(cleanRate)
+            End If
+
             isApiDelay = False: isKpiDelay = False
             If Not IsEmpty(contractedDate) Then
                 If CDbl(apiCompareDate) > CDbl(contractedDate) Then isApiDelay = True
             End If
             If kOnTimeFlag = "N" Then isKpiDelay = True
-            
+
             Dim scenario As String: scenario = ""
             If contractedDays = "Lane Not Available" Or derivedCountryCode = "Unmapped Country" Or derivedDest = "Unmapped City" Or derivedOrig = "Unmapped Origin" Then
                 scenario = "Lane Not Available"
@@ -583,11 +634,11 @@ Sub CompareShipmentData()
             ElseIf Not isApiDelay And isKpiDelay Then
                 scenario = "Delay in KPI Only"
             End If
-            
+
             If scenario <> "" And scenario <> "Lane Not Available" Then
                 Dim cStatus As String, cReason As String, cAcc As String
                 cStatus = "": cReason = "": cAcc = ""
-                
+
                 If Trim(kpiDCode) = "" Then
                     If scenario = "Delay in DCT Only" Then
                         kpiDCode = "N/A": cStatus = "": cReason = "": cAcc = ""
@@ -603,25 +654,25 @@ Sub CompareShipmentData()
                         cStatus = "Unmapped": cReason = "Unmapped": cAcc = "Unmapped"
                     End If
                 End If
-                
+
                 ' =======================================================
                 ' TAT PENALTY & AIR SERVICE LOGIC MODULE
                 ' =======================================================
                 Dim isAir As Boolean, actualDays As Long
                 Dim svcOrdered As String, svcProvided As String
                 Dim svcChange As String, payableSvc As String, tatPenalty As Variant
-                
+
                 isAir = False
                 If InStr(1, UCase(apiSvc), "EMERGENCY") > 0 Or InStr(1, UCase(apiSvc), "FAST") > 0 Or InStr(1, UCase(apiSvc), "STANDARD") > 0 Then
                     isAir = True
                     hasAnyAirShipment = True
                 End If
-                
+
                 actualDays = 0
                 If apiCompareDate > 0 And apiSCDate > 0 Then actualDays = CLng(apiCompareDate) - CLng(apiSCDate) + 1
-                
+
                 svcChange = "": payableSvc = "": tatPenalty = ""
-                
+
                 If isAir Then
                     If InStr(1, UCase(apiSvc), "EMERGENCY") > 0 Then
                         svcOrdered = "Emergency"
@@ -632,9 +683,9 @@ Sub CompareShipmentData()
                     Else
                         svcOrdered = "Unknown"
                     End If
-                    
+
                     payableSvc = svcOrdered
-                    
+
                     If actualDays > 0 Then
                         If actualDays <= 3 Then
                             svcProvided = "Emergency"
@@ -645,7 +696,7 @@ Sub CompareShipmentData()
                         Else
                             svcProvided = "Rest"
                         End If
-                        
+
                         If svcOrdered = "Emergency" Then
                             If svcProvided = "Fast" Then
                                 svcChange = "E2F": payableSvc = "Fast": tatPenalty = 0.2
@@ -669,23 +720,33 @@ Sub CompareShipmentData()
                 Else
                     If isApiDelay Then tatPenalty = 0.03
                 End If
-                
+
                 ' Explicitly zero out penalties for Not Chargeable
                 If UCase(Trim(cStatus)) = "NOT CHARGEABLE" And tatPenalty <> "" Then
                     tatPenalty = ""
                 End If
-                
-                ' Mathematically convert 0 back to blank to satisfy grid request
+
+                If IsNumeric(baseAmt) Then
+                    payableAmt = CDbl(baseAmt)
+                    If IsNumeric(tatPenalty) And tatPenalty <> "" Then
+                        penaltyAmt = CDbl(baseAmt) * CDbl(tatPenalty)
+                        payableAmt = CDbl(baseAmt) - CDbl(penaltyAmt)
+                    End If
+                End If
+
+                If penaltyAmt = 0 Then penaltyAmt = ""
+                If payableAmt = 0 Then payableAmt = ""
+
                 If tatPenalty = 0 Then tatPenalty = ""
-                
+
                 Dim displayDCode As String, displayAcc As String
                 displayDCode = kpiDCode
                 If UCase(displayDCode) = "N/A" Or displayDCode = "-" Then displayDCode = ""
-                
+
                 displayAcc = cAcc
                 If Trim(displayAcc) = "-" Then displayAcc = ""
                 ' =======================================================
-                
+
                 outDelay(dRow, 1) = key
                 outDelay(dRow, 2) = scenario
                 outDelay(dRow, 3) = apiSC
@@ -696,23 +757,27 @@ Sub CompareShipmentData()
                 outDelay(dRow, 8) = IIf(apiCompareDate > 0, apiCompareDate, "Missing")
                 outDelay(dRow, 9) = IIf(kpiCompareDate > 0, kpiCompareDate, "Missing")
                 outDelay(dRow, 10) = displayDCode
-                
+
                 If Not dictSeenCodes.exists(kpiDCode) Then dictSeenCodes.Add kpiDCode, 1
-                
+
                 outDelay(dRow, 11) = cReason
                 outDelay(dRow, 12) = displayAcc
                 outDelay(dRow, 13) = IIf(scenario = "Delay in DCT Only", "", cStatus)
                 outDelay(dRow, 14) = svcChange
                 outDelay(dRow, 15) = payableSvc
                 outDelay(dRow, 16) = tatPenalty
-                outDelay(dRow, 17) = IIf(hasSCDisc, "Yes", "No")
-                outDelay(dRow, 18) = IIf(hasPODDisc, "Yes", "No")
-                
+                outDelay(dRow, 17) = penaltyAmt
+                outDelay(dRow, 18) = payableAmt
+                outDelay(dRow, 19) = contractedCurr
+                outDelay(dRow, 20) = laneKey
+                outDelay(dRow, 21) = IIf(hasSCDisc, "Yes", "No")
+                outDelay(dRow, 22) = IIf(hasPODDisc, "Yes", "No")
+
                 dRow = dRow + 1
             End If
         End If
     Next key
-    
+
     Dim mRow2 As Long: mRow2 = 1
     For Each key In dictKPI.Keys
         If Not dictAPI.exists(key) Then
@@ -720,7 +785,7 @@ Sub CompareShipmentData()
             mRow2 = mRow2 + 1
         End If
     Next key
-    
+
     ' ==========================================
     ' 9b. COMPILE LANE MAPPING AUDIT DATA
     ' ==========================================
@@ -728,13 +793,13 @@ Sub CompareShipmentData()
     ReDim outAudit(1 To dictKPI.Count + 1, 1 To 10)
     Dim auditRow As Long: auditRow = 1
     Dim kKey As Variant, kVals As Variant
-    
+
     For Each kKey In dictKPI.Keys
         kVals = dictKPI(kKey)
-        
+
         Dim aCountryName As String, aPostName As String, aCityName As String, aSvc As String
         aSvc = kVals(0): aCountryName = kVals(9): aPostName = kVals(10): aCityName = kVals(11)
-        
+
         Dim aDerivedCountry As String, aDerivedDest As String, aDerivedOrig As String
         If Len(aCountryName) = 2 Then
             aDerivedCountry = UCase(aCountryName)
@@ -743,25 +808,25 @@ Sub CompareShipmentData()
         Else
             aDerivedCountry = "Unmapped Country"
         End If
-        
+
         If dictDestMap.exists(LCase(aCityName)) Then
             aDerivedDest = dictDestMap(LCase(aCityName))
         Else
             aDerivedDest = "Unmapped City"
         End If
-        
+
         aDerivedOrig = GetOriginRegion(aDerivedCountry, aPostName, dictOrigRegs)
-        
+
         Dim aLaneKey As String
         aLaneKey = UCase(aDerivedCountry) & "|" & UCase(aDerivedOrig) & "|" & UCase(aDerivedDest) & "|" & CleanSvc(aSvc)
-        
+
         Dim aContractedDays As Variant
         If dictRateCard.exists(aLaneKey) Then
-            aContractedDays = dictRateCard(aLaneKey)
+            aContractedDays = dictRateCard(aLaneKey)(0)
         Else
             aContractedDays = "Lane Not Available"
         End If
-        
+
         outAudit(auditRow, 1) = kKey
         outAudit(auditRow, 2) = aContractedDays
         outAudit(auditRow, 3) = aCountryName
@@ -772,7 +837,7 @@ Sub CompareShipmentData()
         outAudit(auditRow, 8) = aDerivedDest
         outAudit(auditRow, 9) = aSvc
         outAudit(auditRow, 10) = aLaneKey
-        
+
         auditRow = auditRow + 1
     Next kKey
 
@@ -784,7 +849,7 @@ Sub CompareShipmentData()
     Set wsOutput = wbOut.Sheets(1)
     wsOutput.Name = "Discrepancies_" & Replace(userInput, "/", "-")
     wsOutput.Cells.Font.Color = vbBlack
-    
+
     wsOutput.Range("A1:B1").Merge: wsOutput.Range("A1").Value = "Shipment Count Summary"
     wsOutput.Range("D1:E1").Merge: wsOutput.Range("D1").Value = "Missing HBL/HAWB"
     wsOutput.Range("G1:J1").Merge: wsOutput.Range("G1").Value = "Service Level Discrepancies"
@@ -793,7 +858,6 @@ Sub CompareShipmentData()
     wsOutput.Range("V1:Y1").Merge: wsOutput.Range("V1").Value = "Actual Time of Departure Discrepancies"
     wsOutput.Range("AA1:AD1").Merge: wsOutput.Range("AA1").Value = "Actual Time of Arrival Discrepancies"
     wsOutput.Range("AF1:AI1").Merge: wsOutput.Range("AF1").Value = "Proof of Delivery Date Discrepancies"
-
     wsOutput.Range("A2:B2").Value = Array("Metric", "Value")
     wsOutput.Range("D2:E2").Value = Array("Missing in KPI", "Missing in API")
     wsOutput.Range("G2:J2").Value = Array("HBL Number", "API Service", "KPI Service", "Comment")
@@ -814,10 +878,10 @@ Sub CompareShipmentData()
 
     wsOutput.Range("A3").Value = "DCT (API):": wsOutput.Range("B3").Value = apiCount
     wsOutput.Range("A4").Value = "LSP KPI:": wsOutput.Range("B4").Value = kpiCount
-    
+
     Dim diffCount As Long: diffCount = Abs(apiCount - kpiCount)
     wsOutput.Range("A5").Value = "Difference:": wsOutput.Range("B5").Value = diffCount
-    
+
     Dim varPercent As Double, maxCount As Long
     maxCount = WorksheetFunction.Max(kpiCount, apiCount)
     If maxCount > 0 Then varPercent = diffCount / maxCount Else varPercent = 0
@@ -828,7 +892,7 @@ Sub CompareShipmentData()
     missingInKPI = mRow - 1: missingInAPI = mRow2 - 1
     totalUnique = kpiCount + missingInKPI: matchingShipments = kpiCount - missingInAPI
     If totalUnique > 0 Then matchPercent = matchingShipments / totalUnique Else matchPercent = 0
-    
+
     If matchPercent = 1 Then
         matchSeverity = "No Issue": matchRemark = "No action needed"
     ElseIf matchPercent >= 0.95 Then
@@ -836,11 +900,11 @@ Sub CompareShipmentData()
     Else
         matchSeverity = "Critical Issue": matchRemark = "Immediate escalation required"
     End If
-    
+
     wsOutput.Range("A8").Value = "Total Unique Shipments:": wsOutput.Range("B8").Value = totalUnique
     wsOutput.Range("A9").Value = "No. of Matching Shipments:": wsOutput.Range("B9").Value = matchingShipments
     wsOutput.Range("A10").Value = "Match %:": wsOutput.Range("B10").Value = Format(matchPercent, "0.00%")
-    
+
     With wsOutput.Range("B10")
         .Font.Bold = True
         If matchPercent = 1 Then
@@ -851,7 +915,7 @@ Sub CompareShipmentData()
             .Interior.Color = RGB(255, 199, 206): .Font.Color = RGB(156, 0, 6)
         End If
     End With
-    
+
     wsOutput.Range("A12").Value = "Severity Level:": wsOutput.Range("B12").Value = matchSeverity
     wsOutput.Range("A13").Value = "Remark:": wsOutput.Range("B13").Value = matchRemark
 
@@ -872,7 +936,7 @@ Sub CompareShipmentData()
     If tRow > 1 Then Set lo = wsOutput.ListObjects.Add(xlSrcRange, wsOutput.Range("V2:Y" & 2 + rATD), , xlYes): lo.Name = "TblATD": lo.TableStyle = ""
     If rRow > 1 Then Set lo = wsOutput.ListObjects.Add(xlSrcRange, wsOutput.Range("AA2:AD" & 2 + rATA), , xlYes): lo.Name = "TblATA": lo.TableStyle = ""
     If pRow > 1 Then Set lo = wsOutput.ListObjects.Add(xlSrcRange, wsOutput.Range("AF2:AI" & 2 + rPOD), , xlYes): lo.Name = "TblPOD": lo.TableStyle = ""
-    
+
     With wsOutput.Range("A1:B1, D1:E1, G1:J1, L1:O1, Q1:T1, V1:Y1, AA1:AD1, AF1:AI1")
         .Interior.ThemeColor = xlThemeColorAccent3: .Interior.TintAndShade = 0.4
         .Font.Bold = True: .HorizontalAlignment = xlCenter
@@ -880,7 +944,7 @@ Sub CompareShipmentData()
     With wsOutput.Range("A2:B2, D2:E2, G2:J2, L2:O2, Q2:T2, V2:Y2, AA2:AD2, AF2:AI2")
         .Interior.ThemeColor = xlThemeColorAccent1: .Interior.TintAndShade = 0.6: .Font.Bold = True
     End With
-    
+
     wsOutput.Range("A3:A13").Font.Bold = True
     wsOutput.Range("A2:AI" & wsOutput.Rows.Count).HorizontalAlignment = xlLeft
     wsOutput.Columns("M:N").NumberFormat = "dd/mm/yyyy"
@@ -888,16 +952,16 @@ Sub CompareShipmentData()
     wsOutput.Columns("W:X").NumberFormat = "dd/mm/yyyy"
     wsOutput.Columns("AB:AC").NumberFormat = "dd/mm/yyyy"
     wsOutput.Columns("AG:AH").NumberFormat = "dd/mm/yyyy"
-    
+
     wsOutput.Columns.AutoFit
     wsOutput.Columns("C").ColumnWidth = 3: wsOutput.Columns("F").ColumnWidth = 3
     wsOutput.Columns("K").ColumnWidth = 3: wsOutput.Columns("P").ColumnWidth = 3
     wsOutput.Columns("U").ColumnWidth = 3: wsOutput.Columns("Z").ColumnWidth = 3
     wsOutput.Columns("AE").ColumnWidth = 3
-    
+
     Dim noErrColor As Long, noErrFont As Long
     noErrColor = RGB(198, 239, 206): noErrFont = RGB(0, 97, 0)
-    
+
     If mRow = 1 And mRow2 = 1 Then
         With wsOutput.Range("D3:E3")
             .Merge: .Value = "NO ERRORS FOUND": .HorizontalAlignment = xlCenter
@@ -940,19 +1004,18 @@ Sub CompareShipmentData()
             .Interior.Color = noErrColor: .Font.Color = noErrFont: .Font.Bold = True: .Borders.LineStyle = xlContinuous
         End With
     End If
-
     wsOutput.Activate
     ActiveWindow.SplitRow = 2: ActiveWindow.FreezePanes = True
-    
+
     ' ==========================================
-    ' 11. Dashboard Tab Creation (NEW)
+    ' 11. Dashboard Tab Creation
     ' ==========================================
     Set wsDashboard = wbOut.Sheets.Add(After:=wsOutput)
     wsDashboard.Name = "Delay Dashboard"
     wsDashboard.Cells.Font.Color = vbBlack
     wsDashboard.Activate
     ActiveWindow.DisplayGridlines = False
-    
+
     With wsDashboard.Range("A1:D1")
         .Merge
         .Value = "Delay Discrepancy Dashboard"
@@ -967,7 +1030,7 @@ Sub CompareShipmentData()
     Set wsDelayTab = wbOut.Sheets.Add(After:=wsDashboard)
     wsDelayTab.Name = "Delay Data"
     wsDelayTab.Cells.Font.Color = vbBlack
-    
+
     Dim shpKPI As Shape
     Set shpKPI = wsDelayTab.Shapes.AddShape(msoShapeRoundedRectangle, 0, 0, 210, 25)
     shpKPI.Name = "btnKPI"
@@ -979,7 +1042,7 @@ Sub CompareShipmentData()
     shpKPI.Fill.ForeColor.RGB = RGB(198, 239, 206)
     shpKPI.Line.Visible = msoFalse
     shpKPI.OnAction = "'" & ThisWorkbook.Name & "'!ToggleKPIFilter"
-    
+
     Dim shpSC As Shape
     Set shpSC = wsDelayTab.Shapes.AddShape(msoShapeRoundedRectangle, 0, 0, 210, 25)
     shpSC.Name = "btnSC"
@@ -991,7 +1054,7 @@ Sub CompareShipmentData()
     shpSC.Fill.ForeColor.RGB = RGB(198, 239, 206)
     shpSC.Line.Visible = msoFalse
     shpSC.OnAction = "'" & ThisWorkbook.Name & "'!ToggleSCFilter"
-    
+
     Dim shpPOD As Shape
     Set shpPOD = wsDelayTab.Shapes.AddShape(msoShapeRoundedRectangle, 0, 0, 210, 25)
     shpPOD.Name = "btnPOD"
@@ -1004,68 +1067,64 @@ Sub CompareShipmentData()
     shpPOD.Line.Visible = msoFalse
     shpPOD.OnAction = "'" & ThisWorkbook.Name & "'!TogglePODFilter"
 
-    wsDelayTab.Range("A4:S4").Value = Array("HBL Number", "Scenario", "Start Clock (DCT)", "Start Clock (KPI)", "Contracted Transit Time", "Actual Transit Time (DCT)", "Contracted Delivery Date (DCT)", "POD Date (DCT)", "POD Date (KPI)", "Delay Code", "Reason", "Accountable", "LSP Chargeability Status", "Service Level Change", "Payable Service Level", "TAT Penalty", "SC Discrepancy", "POD Discrepancy", "Visibility Helper")
-    
+    wsDelayTab.Range("A4:W4").Value = Array("HBL Number", "Scenario", "Start Clock (DCT)", "Start Clock (KPI)", "Contracted Transit Time", "Actual Transit Time (DCT)", "Contracted Delivery Date (DCT)", "POD Date (DCT)", "POD Date (KPI)", "Delay Code", "Reason", "Accountable", "LSP Chargeability Status", "Service Level Change", "Payable Service Level", "TAT Penalty", "Penalty Amt", "Payable Amt", "Currency", "Lane Key", "SC Discrepancy", "POD Discrepancy", "Visibility Helper")
+
     Dim rDelay As Long: rDelay = dRow - 1: If rDelay < 1 Then rDelay = 1
-    If dRow > 1 Then wsDelayTab.Range("A5").Resize(rDelay, 19).Value = outDelay
-    
+    If dRow > 1 Then wsDelayTab.Range("A5").Resize(rDelay, 23).Value = outDelay
+
     Dim loCols As Integer
-    loCols = 19
-    
+    loCols = 23
+
     If Not hasAnyAirShipment Then
         wsDelayTab.Columns("N:O").Delete Shift:=xlToLeft
-        loCols = 17
+        loCols = 21
     End If
-    
+
     With wsDelayTab.Range(wsDelayTab.Cells(4, 1), wsDelayTab.Cells(4, loCols))
         .Interior.ThemeColor = xlThemeColorAccent2: .Interior.TintAndShade = 0.4: .Font.Bold = True
     End With
-    
+
     Set lo = wsDelayTab.ListObjects.Add(xlSrcRange, wsDelayTab.Range(wsDelayTab.Cells(4, 1), wsDelayTab.Cells(4 + rDelay, loCols)), , xlYes)
     lo.Name = "TblDelays": lo.TableStyle = ""
-    
+
     Dim colToggleSC As String, colTogglePOD As String, colToggleKPI As String
-    If hasAnyAirShipment Then
-        colToggleSC = "$AA$1"
-        colTogglePOD = "$AB$1"
-        colToggleKPI = "$AC$1"
-    Else
-        colToggleSC = "$Y$1"
-        colTogglePOD = "$Z$1"
-        colToggleKPI = "$AA$1"
-    End If
-    
+    colToggleSC = "$CB$1"
+    colTogglePOD = "$CC$1"
+    colToggleKPI = "$CD$1"
+
     wsDelayTab.Range(colToggleSC).Value = True
     wsDelayTab.Range(colTogglePOD).Value = True
     wsDelayTab.Range(colToggleKPI).Value = True
-    
+
     wbOut.Names.Add Name:="ToggleSC", RefersTo:="='" & wsDelayTab.Name & "'!" & colToggleSC
     wbOut.Names.Add Name:="TogglePOD", RefersTo:="='" & wsDelayTab.Name & "'!" & colTogglePOD
     wbOut.Names.Add Name:="ToggleKPI", RefersTo:="='" & wsDelayTab.Name & "'!" & colToggleKPI
-    
-    lo.ListColumns("Visibility Helper").DataBodyRange.Formula = "=IF(AND(ToggleKPI=FALSE, [@[Scenario]]=""Delay in KPI Only""), ""0"", IF(AND([@[SC Discrepancy]]=""No"", [@[POD Discrepancy]]=""No""), ""1"", IF(OR(AND([@[SC Discrepancy]]=""Yes"", ToggleSC=TRUE), AND([@[POD Discrepancy]]=""Yes"", TogglePOD=TRUE)), ""1"", ""0"")))"
-    
+
+    lo.ListColumns("Visibility Helper").DataBodyRange.Formula = "=IF(AND(ToggleKPI=FALSE, [@Scenario]=""Delay in KPI Only""), ""0"", IF(AND([@[SC Discrepancy]]=""No"", [@[POD Discrepancy]]=""No""), ""1"", IF(OR(AND([@[SC Discrepancy]]=""Yes"", ToggleSC=TRUE), AND([@[POD Discrepancy]]=""Yes"", TogglePOD=TRUE)), ""1"", ""0"")))"
+
     wsDelayTab.Cells.HorizontalAlignment = xlLeft
     wsDelayTab.Columns("C:D").NumberFormat = "dd/mm/yyyy"
     wsDelayTab.Columns("G:I").NumberFormat = "dd/mm/yyyy"
-    
+
     On Error Resume Next
     lo.ListColumns("TAT Penalty").DataBodyRange.NumberFormat = "0%"
+    lo.ListColumns("Penalty Amt").DataBodyRange.NumberFormat = "#,##0.00"
+    lo.ListColumns("Payable Amt").DataBodyRange.NumberFormat = "#,##0.00"
     On Error GoTo 0
-    
+
     wsDelayTab.Columns.AutoFit
-    
+
     wsDelayTab.Columns("C:D").Hidden = True
     wsDelayTab.Columns("G:I").Hidden = True
-    
+
     On Error Resume Next
     lo.ListColumns("SC Discrepancy").Range.EntireColumn.Hidden = True
     lo.ListColumns("POD Discrepancy").Range.EntireColumn.Hidden = True
     lo.ListColumns("Visibility Helper").Range.EntireColumn.Hidden = True
     On Error GoTo 0
-    
+
     lo.Range.AutoFilter Field:=loCols, Criteria1:="1"
-    
+
     Dim visibleWidthSum As Double
     Dim colIdx As Integer
     visibleWidthSum = 0
@@ -1074,37 +1133,36 @@ Sub CompareShipmentData()
             visibleWidthSum = visibleWidthSum + wsDelayTab.Columns(colIdx).Width
         End If
     Next colIdx
-    
+
     Dim btnWidth As Double, gapBtn As Double, totalBtnWidth As Double, btnGroupStart As Double
     btnWidth = 210
     gapBtn = 30
     totalBtnWidth = (btnWidth * 3) + (gapBtn * 2)
     btnGroupStart = (visibleWidthSum - totalBtnWidth) / 2
     If btnGroupStart < 10 Then btnGroupStart = 10
-    
+
     shpKPI.Left = btnGroupStart
     shpKPI.Top = wsDelayTab.Range("B2").Top
-    
+
     shpSC.Left = btnGroupStart + btnWidth + gapBtn
     shpSC.Top = wsDelayTab.Range("B2").Top
-    
+
     shpPOD.Left = btnGroupStart + (btnWidth * 2) + (gapBtn * 2)
     shpPOD.Top = wsDelayTab.Range("B2").Top
-    
+
     ' ==========================================
     ' 11b. POPULATE DASHBOARD TAB
     ' ==========================================
     If rDelay > 0 And Not lo.DataBodyRange Is Nothing Then
-        
+
         wsDashboard.Range("A3:B3").Value = Array("Delay Scenario", "Count")
         wsDashboard.Range("A4:A6").Value = Application.Transpose(Array("Delay in Both", "Delay in DCT Only", "Delay in KPI Only"))
-        
         wsDashboard.Range("B4:B6").Value = 1
-        
+
         With wsDashboard.Range("A3:B3")
             .Interior.ThemeColor = xlThemeColorAccent1: .Interior.TintAndShade = 0.6: .Font.Bold = True
         End With
-        
+
         With wsDashboard.Range("B4:B6").FormatConditions.Add(Type:=xlExpression, Formula1:="=$A4=""Delay in Both""")
             .Interior.Color = RGB(255, 235, 156): .Font.Color = RGB(156, 101, 0)
         End With
@@ -1114,59 +1172,92 @@ Sub CompareShipmentData()
         With wsDashboard.Range("B4:B6").FormatConditions.Add(Type:=xlExpression, Formula1:="=$A4=""Delay in KPI Only""")
             .Interior.Color = RGB(198, 239, 206): .Font.Color = RGB(0, 97, 0)
         End With
-        
+
         wsDashboard.Range("A8:B8").Value = Array("Chargeability", "Count")
         wsDashboard.Range("A9:A10").Value = Application.Transpose(Array("Chargeable", "Not Chargeable"))
         wsDashboard.Range("B9:B10").Value = 1
-        
+
         With wsDashboard.Range("A8:B8")
             .Interior.ThemeColor = xlThemeColorAccent1: .Interior.TintAndShade = 0.6: .Font.Bold = True
         End With
-        
+
         With wsDashboard.Range("B9:B10").FormatConditions.Add(Type:=xlExpression, Formula1:="=$A9=""Chargeable""")
             .Interior.Color = RGB(198, 239, 206): .Font.Color = RGB(0, 97, 0)
         End With
         With wsDashboard.Range("B9:B10").FormatConditions.Add(Type:=xlExpression, Formula1:="=$A9=""Not Chargeable""")
             .Interior.Color = RGB(255, 199, 206): .Font.Color = RGB(156, 0, 6)
         End With
-        
+
         wsDashboard.Range("A12:B12").Value = Array("TAT Penalty", "Count")
         With wsDashboard.Range("A12:B12")
             .Interior.ThemeColor = xlThemeColorAccent1: .Interior.TintAndShade = 0.6: .Font.Bold = True
         End With
-        
+
         wsDashboard.Range("A13:A14").Value = Application.Transpose(Array("0%", "20%"))
         wsDashboard.Range("B13:B14").Value = 1
-        
+
         wsDashboard.Range("D3:H3").Value = Array("Delay Code", "Count", "Reason", "Accountable", "LSP Chargeability Status")
         With wsDashboard.Range("D3:H3")
             .Interior.ThemeColor = xlThemeColorAccent1: .Interior.TintAndShade = 0.6: .Font.Bold = True
         End With
+
+        ' -------------------------------------------------------------
+        ' NEW CHART DATA HEADERS (Shifted Right)
+        ' -------------------------------------------------------------
+        wsDashboard.Range("P3:Q3").Value = Array("Lane Key (Penalty)", "Count")
+        With wsDashboard.Range("P3:Q3")
+            .Interior.ThemeColor = xlThemeColorAccent1: .Interior.TintAndShade = 0.6: .Font.Bold = True
+        End With
         
+        ' SHIFTED: Table now starts at column T
+        wsDashboard.Range("T3:W3").Value = Array("Lane Key", "HBL Number", "Penalty Amt", "Currency")
+        With wsDashboard.Range("T3:W3")
+            .Interior.ThemeColor = xlThemeColorAccent1: .Interior.TintAndShade = 0.6: .Font.Bold = True
+        End With
+        
+        ' SHIFTED: Background Summary Chart Source Data Table now starts at column Y
+        wsDashboard.Range("Y3:Z3").Value = Array("Lane Key", "Total Penalty")
+        With wsDashboard.Range("Y3:Z3")
+            .Interior.ThemeColor = xlThemeColorAccent1: .Interior.TintAndShade = 0.6: .Font.Bold = True
+        End With
+
+        ' Process and print grouped stats and sources
         UpdateDashboardTables wbOut
-        
-        Dim rCode As Long, rPenalty As Long
+
+        Dim rCode As Long, rPenalty As Long, rLanePie As Long, rLaneTotal As Long
         rCode = wsDashboard.Cells(wsDashboard.Rows.Count, "D").End(xlUp).Row + 1
         rPenalty = wsDashboard.Cells(wsDashboard.Rows.Count, "A").End(xlUp).Row + 1
+        rLanePie = wsDashboard.Cells(wsDashboard.Rows.Count, "P").End(xlUp).Row + 1
+        rLaneTotal = wsDashboard.Cells(wsDashboard.Rows.Count, "Y").End(xlUp).Row + 1
         
-        wsDashboard.Columns("A:H").AutoFit
+        wsDashboard.Columns("A:Z").AutoFit
         
+        ' Apply Gap Widths
+        wsDashboard.Columns("O:O").ColumnWidth = 3
+        wsDashboard.Columns("R:R").ColumnWidth = 3
+        wsDashboard.Columns("S:S").ColumnWidth = 3
+        wsDashboard.Columns("X:X").ColumnWidth = 3
+        
+        ' Update Number formats for new columns
+        wsDashboard.Columns("V:V").NumberFormat = "#,##0.00"
+        wsDashboard.Columns("Z:Z").NumberFormat = "#,##0.00"
+
         ' ==========================================
         ' 11c. DYNAMIC DASHBOARD BLOCK (CHARTS)
         ' ==========================================
         Dim chartsTop As Double
         Dim bottomTableA As Double, bottomTableD As Double
-        
+
         bottomTableA = wsDashboard.Range("A" & (rPenalty - 1)).Top + wsDashboard.Range("A" & (rPenalty - 1)).Height + 20
         bottomTableD = wsDashboard.Range("D" & (rCode - 1)).Top + wsDashboard.Range("D" & (rCode - 1)).Height + 20
-        
+
         chartsTop = WorksheetFunction.Max(bottomTableA, bottomTableD) + 15
-        
+
         Dim chartWidth As Double, chartHeight As Double, chartGap As Double
         chartWidth = 260
         chartHeight = 220
         chartGap = 15
-        
+
         Dim cho As ChartObject
         Set cho = wsDashboard.ChartObjects.Add(Left:=15, Top:=chartsTop, Width:=chartWidth, Height:=chartHeight)
         cho.Name = "DelayPieChart"
@@ -1183,7 +1274,7 @@ Sub CompareShipmentData()
             On Error GoTo 0
         End With
         cho.ShapeRange.Line.Visible = msoFalse: cho.ShapeRange.Fill.Solid: cho.ShapeRange.Fill.ForeColor.RGB = RGB(255, 255, 255)
-        
+
         Dim cho2 As ChartObject
         Set cho2 = wsDashboard.ChartObjects.Add(Left:=15 + chartWidth + chartGap, Top:=chartsTop, Width:=chartWidth, Height:=chartHeight)
         cho2.Name = "ChargeabilityPieChart"
@@ -1199,21 +1290,21 @@ Sub CompareShipmentData()
             On Error GoTo 0
         End With
         cho2.ShapeRange.Line.Visible = msoFalse: cho2.ShapeRange.Fill.Solid: cho2.ShapeRange.Fill.ForeColor.RGB = RGB(255, 255, 255)
-        
+
         If rCode > 4 Then
             Dim cho3 As ChartObject
             Set cho3 = wsDashboard.ChartObjects.Add(Left:=15 + (chartWidth * 2) + (chartGap * 2), Top:=chartsTop, Width:=chartWidth, Height:=chartHeight)
             cho3.Name = "DelayCodesPieChart"
             With cho3.Chart
                 .SetSourceData Source:=wsDashboard.Range("D3:E" & (rCode - 1)): .PlotVisibleOnly = False: .ChartType = xlPie: .HasTitle = True
-                .ChartTitle.Text = "Delay Code Frequency Distribution": .ChartTitle.Font.Size = 12: .ApplyDataLabels Type:=xlDataLabelsShowLabelAndPercent
+                .ChartTitle.Text = "Delay Code Distribution": .ChartTitle.Font.Size = 12: .ApplyDataLabels Type:=xlDataLabelsShowLabelAndPercent
                 With .SeriesCollection(1).DataLabels
                     .ShowCategoryName = True: .ShowPercentage = True: .ShowValue = False: .Separator = vbCrLf
                 End With
             End With
             cho3.ShapeRange.Line.Visible = msoFalse: cho3.ShapeRange.Fill.Solid: cho3.ShapeRange.Fill.ForeColor.RGB = RGB(255, 255, 255)
         End If
-        
+
         If rPenalty > 13 Then
             Dim cho4 As ChartObject
             Set cho4 = wsDashboard.ChartObjects.Add(Left:=15 + (chartWidth * 3) + (chartGap * 3), Top:=chartsTop, Width:=chartWidth, Height:=chartHeight)
@@ -1225,13 +1316,13 @@ Sub CompareShipmentData()
                 .HasLegend = True
                 .ChartTitle.Text = "TAT Penalty Distribution"
                 .ChartTitle.Font.Size = 12
-                
+
                 If .SeriesCollection.Count > 0 Then
                     On Error Resume Next
                     .SeriesCollection(1).XValues = wsDashboard.Range("A13:A" & (rPenalty - 1))
                     .SeriesCollection(1).Values = wsDashboard.Range("B13:B" & (rPenalty - 1))
                     On Error GoTo 0
-                    
+
                     .SeriesCollection(1).HasDataLabels = True
                     With .SeriesCollection(1).DataLabels
                         .ShowCategoryName = False
@@ -1243,26 +1334,81 @@ Sub CompareShipmentData()
             End With
             cho4.ShapeRange.Line.Visible = msoFalse: cho4.ShapeRange.Fill.Solid: cho4.ShapeRange.Fill.ForeColor.RGB = RGB(255, 255, 255)
         End If
-        
-        wsDashboard.Range("B4").Formula = "=COUNTIFS(TblDelays[Scenario], ""Delay in Both"", TblDelays[Visibility Helper], ""1"")"
-        wsDashboard.Range("B5").Formula = "=COUNTIFS(TblDelays[Scenario], ""Delay in DCT Only"", TblDelays[Visibility Helper], ""1"")"
-        wsDashboard.Range("B6").Formula = "=COUNTIFS(TblDelays[Scenario], ""Delay in KPI Only"", TblDelays[Visibility Helper], ""1"")"
-        
-        wsDashboard.Range("B9").Formula = "=COUNTIFS(TblDelays[LSP Chargeability Status], ""Chargeable"", TblDelays[Visibility Helper], ""1"")"
-        wsDashboard.Range("B10").Formula = "=COUNTIFS(TblDelays[LSP Chargeability Status], ""Not Chargeable"", TblDelays[Visibility Helper], ""1"")"
-        wsDashboard.Calculate
-        
+
+        ' -------------------------------------------------------------
+        ' NEW CHARTS (Pie Chart Lane Mapping)
+        ' -------------------------------------------------------------
+        If rLanePie > 4 Then
+            Dim cho5 As ChartObject
+            Set cho5 = wsDashboard.ChartObjects.Add(Left:=15 + (chartWidth * 4) + (chartGap * 4), Top:=chartsTop, Width:=chartWidth, Height:=chartHeight)
+            cho5.Name = "LaneKeyPieChart"
+            With cho5.Chart
+                .SetSourceData Source:=wsDashboard.Range("P3:Q" & (rLanePie - 1)), PlotBy:=xlColumns
+                .ChartType = xlPie
+                .HasTitle = True
+                .ChartTitle.Text = "Penalty Lane Key Distribution"
+                .ChartTitle.Font.Size = 12
+                .ApplyDataLabels Type:=xlDataLabelsShowLabelAndPercent
+                With .SeriesCollection(1).DataLabels
+                    .ShowCategoryName = False
+                    .ShowPercentage = True
+                    .ShowValue = False
+                    .Separator = vbCrLf
+                End With
+            End With
+            cho5.ShapeRange.Line.Visible = msoFalse: cho5.ShapeRange.Fill.Solid: cho5.ShapeRange.Fill.ForeColor.RGB = RGB(255, 255, 255)
+        End If
+
+        ' -------------------------------------------------------------
+        ' NEW CHART: Total Penalty Amount vs Lane Key (Column)
+        ' -------------------------------------------------------------
+        If rLaneTotal > 4 Then
+            Dim cho6 As ChartObject
+            Dim numPies As Integer
+            numPies = 2
+            If rCode > 4 Then numPies = numPies + 1
+            If rPenalty > 13 Then numPies = numPies + 1
+            If rLanePie > 4 Then numPies = numPies + 1
+
+            Dim totalChartWidth As Double
+            totalChartWidth = (numPies * chartWidth) + ((numPies - 1) * chartGap)
+
+            Set cho6 = wsDashboard.ChartObjects.Add(Left:=15, Top:=chartsTop + chartHeight + 20, Width:=totalChartWidth, Height:=250)
+            cho6.Name = "TotalPenaltyColumnChart"
+            With cho6.Chart
+                .SetSourceData Source:=wsDashboard.Range("Y3:Z" & (rLaneTotal - 1)), PlotBy:=xlColumns
+                .ChartType = xlColumnClustered
+                .HasTitle = True
+                .ChartTitle.Text = "Total Penalty Amount per Lane Key"
+                .ChartTitle.Font.Size = 14
+                .HasLegend = False
+                .ApplyDataLabels Type:=xlDataLabelsShowValue
+
+                If .SeriesCollection.Count > 0 Then
+                    On Error Resume Next
+                    .SeriesCollection(1).Format.Fill.ForeColor.RGB = RGB(225, 80, 80)
+                    On Error GoTo 0
+                End If
+
+                .Axes(xlCategory, xlPrimary).HasTitle = True
+                .Axes(xlCategory, xlPrimary).AxisTitle.Text = "Lane Key"
+                .Axes(xlValue, xlPrimary).HasTitle = True
+                .Axes(xlValue, xlPrimary).AxisTitle.Text = "Total Penalty Amount"
+            End With
+            cho6.ShapeRange.Line.Visible = msoFalse: cho6.ShapeRange.Fill.Solid: cho6.ShapeRange.Fill.ForeColor.RGB = RGB(255, 255, 255)
+        End If
+
         ' ==========================================
         ' 11d. SYNCED BUTTON CREATION ON DASHBOARD
         ' ==========================================
         Dim dashBtnLeft As Double
         dashBtnLeft = wsDashboard.Range("J3").Left
-        
+
         Dim btnKPI_Top As Double, btnSC_Top As Double, btnPOD_Top As Double
         btnKPI_Top = wsDashboard.Range("J3").Top
         btnSC_Top = wsDashboard.Range("J7").Top
         btnPOD_Top = wsDashboard.Range("J11").Top
-        
+
         Dim shpKPIDash As Shape
         Set shpKPIDash = wsDashboard.Shapes.AddShape(msoShapeRoundedRectangle, dashBtnLeft, btnKPI_Top, 240, 30)
         shpKPIDash.Name = "btnKPI"
@@ -1274,7 +1420,7 @@ Sub CompareShipmentData()
         shpKPIDash.Fill.ForeColor.RGB = RGB(198, 239, 206)
         shpKPIDash.Line.Visible = msoFalse
         shpKPIDash.OnAction = "'" & ThisWorkbook.Name & "'!ToggleKPIFilter"
-        
+
         Dim shpSCDash As Shape
         Set shpSCDash = wsDashboard.Shapes.AddShape(msoShapeRoundedRectangle, dashBtnLeft, btnSC_Top, 240, 30)
         shpSCDash.Name = "btnSC"
@@ -1286,7 +1432,7 @@ Sub CompareShipmentData()
         shpSCDash.Fill.ForeColor.RGB = RGB(198, 239, 206)
         shpSCDash.Line.Visible = msoFalse
         shpSCDash.OnAction = "'" & ThisWorkbook.Name & "'!ToggleSCFilter"
-        
+
         Dim shpPODDash As Shape
         Set shpPODDash = wsDashboard.Shapes.AddShape(msoShapeRoundedRectangle, dashBtnLeft, btnPOD_Top, 240, 30)
         shpPODDash.Name = "btnPOD"
@@ -1299,8 +1445,15 @@ Sub CompareShipmentData()
         shpPODDash.Line.Visible = msoFalse
         shpPODDash.OnAction = "'" & ThisWorkbook.Name & "'!TogglePODFilter"
 
+        wsDashboard.Range("B4").Formula = "=COUNTIFS(TblDelays[Scenario], ""Delay in Both"", TblDelays[Visibility Helper], ""1"")"
+        wsDashboard.Range("B5").Formula = "=COUNTIFS(TblDelays[Scenario], ""Delay in DCT Only"", TblDelays[Visibility Helper], ""1"")"
+        wsDashboard.Range("B6").Formula = "=COUNTIFS(TblDelays[Scenario], ""Delay in KPI Only"", TblDelays[Visibility Helper], ""1"")"
+
+        wsDashboard.Range("B9").Formula = "=COUNTIFS(TblDelays[LSP Chargeability Status], ""Chargeable"", TblDelays[Visibility Helper], ""1"")"
+        wsDashboard.Range("B10").Formula = "=COUNTIFS(TblDelays[LSP Chargeability Status], ""Not Chargeable"", TblDelays[Visibility Helper], ""1"")"
+        wsDashboard.Calculate
     End If
-    
+
     If rDelay > 0 And Not lo.DataBodyRange Is Nothing Then
         With lo.ListColumns("Scenario").DataBodyRange.FormatConditions.Add(Type:=xlCellValue, Operator:=xlEqual, Formula1:="=""Delay in Both""")
             .Interior.Color = RGB(255, 235, 156): .Font.Color = RGB(156, 101, 0)
@@ -1311,7 +1464,7 @@ Sub CompareShipmentData()
         With lo.ListColumns("Scenario").DataBodyRange.FormatConditions.Add(Type:=xlCellValue, Operator:=xlEqual, Formula1:="=""Delay in KPI Only""")
             .Interior.Color = RGB(198, 239, 206): .Font.Color = RGB(0, 97, 0)
         End With
-        
+
         With lo.ListColumns("LSP Chargeability Status").DataBodyRange.FormatConditions.Add(Type:=xlCellValue, Operator:=xlEqual, Formula1:="=""Chargeable""")
             .Interior.Color = RGB(198, 239, 206): .Font.Color = RGB(0, 97, 0)
         End With
@@ -1319,12 +1472,12 @@ Sub CompareShipmentData()
             .Interior.Color = RGB(255, 199, 206): .Font.Color = RGB(156, 0, 6)
         End With
     End If
-    
+
     wsDelayTab.Activate
     ActiveWindow.SplitRow = 4
     ActiveWindow.SplitColumn = 0
     ActiveWindow.FreezePanes = True
-    
+
     If hasAnyAirShipment Then
         ActiveWindow.Zoom = 78
     Else
@@ -1338,22 +1491,22 @@ Sub CompareShipmentData()
     Set wsAuditTab = wbOut.Sheets.Add(After:=wsDelayTab)
     wsAuditTab.Name = "Lane Mapping Audit"
     wsAuditTab.Cells.Font.Color = vbBlack
-    
+
     wsAuditTab.Range("A1:J1").Value = Array("HAWB / HBL Number", "Contracted Transit Days", "KPI Origin Country Name", "Derived Country Code", "KPI Post Code", "Derived Origin Region", "KPI Destination City", "Derived Destination Region", "KPI Service Level", "Generated Lane Key")
-    
+
     If auditRow > 1 Then wsAuditTab.Range("A2").Resize(auditRow - 1, 10).Value = outAudit
-    
+
     With wsAuditTab.Range("A1:J1")
         .Interior.ThemeColor = xlThemeColorAccent5
         .Interior.TintAndShade = 0.6
         .Font.Bold = True
     End With
-    
+
     Dim loAudit As ListObject
     Set loAudit = wsAuditTab.ListObjects.Add(xlSrcRange, wsAuditTab.Range("A1:J" & auditRow), , xlYes)
     loAudit.Name = "TblLaneAudit": loAudit.TableStyle = ""
     wsAuditTab.Cells.HorizontalAlignment = xlLeft
-    
+
     If auditRow > 1 Then
         With loAudit.ListColumns("Contracted Transit Days").DataBodyRange.FormatConditions.Add(Type:=xlCellValue, Operator:=xlEqual, Formula1:="=""Lane Not Available""")
             .Interior.Color = RGB(255, 235, 156): .Font.Color = RGB(156, 101, 0)
@@ -1368,7 +1521,7 @@ Sub CompareShipmentData()
             .Interior.Color = RGB(255, 235, 156): .Font.Color = RGB(156, 101, 0)
         End With
     End If
-    
+
     wsAuditTab.Columns.AutoFit
     wsAuditTab.Columns("J").ColumnWidth = 50
     wsAuditTab.Activate
@@ -1378,16 +1531,16 @@ Sub CompareShipmentData()
     ' FINISH AND CLEANUP
     ' ==========================================
     Application.ScreenUpdating = True
-    
+
     wsDashboard.Activate
-    ActiveWindow.Zoom = 70
-    
+    ActiveWindow.Zoom = 65
+
     wsOutput.Activate
-    
+
     Application.Calculation = xlCalculationAutomatic
     MsgBox "Validation complete! Dashboards, Discrepancies, Delays, and Lane Mapping Audit have been documented.", vbInformation, "Success"
     Exit Sub
-    
+
 ExitMacro:
     Application.ScreenUpdating = True
     Application.Calculation = xlCalculationAutomatic
@@ -1403,21 +1556,27 @@ Sub UpdateDashboardTables(wb As Workbook)
     Set wsDash = wb.Sheets("Delay Dashboard")
     On Error GoTo 0
     If wsData Is Nothing Or wsDash Is Nothing Then Exit Sub
-    
+
     Dim lo As ListObject
     Set lo = wsData.ListObjects("TblDelays")
     If lo Is Nothing Then Exit Sub
-    
+
     Dim dictCodes As Object
     Set dictCodes = CreateObject("Scripting.Dictionary")
     dictCodes.CompareMode = vbTextCompare
-    
+
     Dim dictPenalties As Object
     Set dictPenalties = CreateObject("Scripting.Dictionary")
     dictPenalties.CompareMode = vbTextCompare
-    
+
+    ' New Dictionary Handlers
+    Dim dictLanePie As Object, dictLaneCol As Object
+    Set dictLanePie = CreateObject("Scripting.Dictionary"): dictLanePie.CompareMode = vbTextCompare
+    Set dictLaneCol = CreateObject("Scripting.Dictionary"): dictLaneCol.CompareMode = vbTextCompare
+
     Dim visColIdx As Long, dCodeColIdx As Long, reasonColIdx As Long, accColIdx As Long, statusColIdx As Long
-    Dim tatColIdx As Long
+    Dim tatColIdx As Long, hblColIdx As Long, laneColIdx As Long, pAmtColIdx As Long, currColIdx As Long
+
     On Error Resume Next
     visColIdx = lo.ListColumns("Visibility Helper").Index
     dCodeColIdx = lo.ListColumns("Delay Code").Index
@@ -1425,20 +1584,24 @@ Sub UpdateDashboardTables(wb As Workbook)
     accColIdx = lo.ListColumns("Accountable").Index
     statusColIdx = lo.ListColumns("LSP Chargeability Status").Index
     tatColIdx = lo.ListColumns("TAT Penalty").Index
+    hblColIdx = lo.ListColumns("HBL Number").Index
+    laneColIdx = lo.ListColumns("Lane Key").Index
+    pAmtColIdx = lo.ListColumns("Penalty Amt").Index
+    currColIdx = lo.ListColumns("Currency").Index
     On Error GoTo 0
     If visColIdx = 0 Then Exit Sub
-    
+
     Dim arrData As Variant
     arrData = lo.DataBodyRange.Value
     If IsEmpty(arrData) Then Exit Sub
-    
+
     Dim i As Long, dCode As String
     For i = 1 To UBound(arrData, 1)
         If CStr(arrData(i, visColIdx)) = "1" Then
             dCode = Trim(CStr(arrData(i, dCodeColIdx)))
-            
+
             If dCode = "" Or dCode = "-" Then dCode = "N/A"
-            
+
             If Not dictCodes.exists(dCode) Then
                 dictCodes.Add dCode, Array(1, arrData(i, reasonColIdx), arrData(i, accColIdx), arrData(i, statusColIdx))
             Else
@@ -1447,11 +1610,11 @@ Sub UpdateDashboardTables(wb As Workbook)
                 tmp(0) = tmp(0) + 1
                 dictCodes(dCode) = tmp
             End If
-            
+
             If tatColIdx > 0 Then
                 Dim tpVal As Variant, tpStr As String
                 tpVal = arrData(i, tatColIdx)
-                
+
                 If Trim(CStr(tpVal)) = "" Then
                     tpStr = "0%"
                 ElseIf IsNumeric(tpVal) Then
@@ -1459,31 +1622,68 @@ Sub UpdateDashboardTables(wb As Workbook)
                 Else
                     tpStr = Trim(CStr(tpVal))
                 End If
-                
+
                 If Not dictPenalties.exists(tpStr) Then
                     dictPenalties.Add tpStr, 1
                 Else
                     dictPenalties(tpStr) = dictPenalties(tpStr) + 1
                 End If
             End If
-            
+
+            ' New Chart Logic Extract
+            If pAmtColIdx > 0 And laneColIdx > 0 And hblColIdx > 0 Then
+                Dim pAmtVal As Variant
+                pAmtVal = arrData(i, pAmtColIdx)
+                If IsNumeric(pAmtVal) Then
+                    If pAmtVal > 0 Then
+                        Dim lk As String, hbl As String, currStr As String
+                        lk = Trim(CStr(arrData(i, laneColIdx)))
+                        hbl = Trim(CStr(arrData(i, hblColIdx)))
+                        If currColIdx > 0 Then currStr = Trim(CStr(arrData(i, currColIdx))) Else currStr = ""
+                        If lk = "" Then lk = "Unknown"
+
+                        If Not dictLanePie.exists(lk) Then
+                            dictLanePie.Add lk, 1
+                        Else
+                            dictLanePie(lk) = dictLanePie(lk) + 1
+                        End If
+
+                        If Not dictLaneCol.exists(lk) Then
+                            dictLaneCol.Add lk, New Collection
+                        End If
+                        dictLaneCol(lk).Add Array(hbl, pAmtVal, currStr)
+                    End If
+                End If
+            End If
+
         End If
     Next i
-    
+
     Dim lastRow As Long
     lastRow = wsDash.Cells(wsDash.Rows.Count, "D").End(xlUp).Row
     If lastRow >= 4 Then
         wsDash.Range("D4:H" & lastRow).Clear
         wsDash.Range("D4:H" & lastRow).FormatConditions.Delete
     End If
-    
+
     Dim lastRowA As Long
     lastRowA = wsDash.Cells(wsDash.Rows.Count, "A").End(xlUp).Row
     If lastRowA >= 13 Then
         wsDash.Range("A13:B" & lastRowA).Clear
         wsDash.Range("A13:B" & lastRowA).FormatConditions.Delete
     End If
-    
+
+    ' Clear previously stored Chart source arrays
+    Dim lrP As Long, lrS As Long, lrX As Long
+    lrP = wsDash.Cells(wsDash.Rows.Count, "P").End(xlUp).Row
+    If lrP >= 4 Then wsDash.Range("P4:Q" & lrP).ClearContents
+
+    lrS = wsDash.Cells(wsDash.Rows.Count, "T").End(xlUp).Row
+    If lrS >= 4 Then wsDash.Range("T4:W" & lrS).ClearContents
+
+    lrX = wsDash.Cells(wsDash.Rows.Count, "Y").End(xlUp).Row
+    If lrX >= 4 Then wsDash.Range("Y4:Z" & lrX).ClearContents
+
     Dim r As Long: r = 4
     Dim k As Variant
     For Each k In dictCodes.Keys
@@ -1494,7 +1694,7 @@ Sub UpdateDashboardTables(wb As Workbook)
         wsDash.Cells(r, "H").Value = dictCodes(k)(3)
         r = r + 1
     Next k
-    
+
     If r > 5 Then
         Dim sortRng As Range
         Set sortRng = wsDash.Range("D3:H" & r - 1)
@@ -1506,7 +1706,7 @@ Sub UpdateDashboardTables(wb As Workbook)
             .Apply
         End With
     End If
-    
+
     If r > 4 Then
         With wsDash.Range("H4:H" & r - 1).FormatConditions.Add(Type:=xlCellValue, Operator:=xlEqual, Formula1:="=""Chargeable""")
             .Interior.Color = RGB(198, 239, 206): .Font.Color = RGB(0, 97, 0)
@@ -1518,16 +1718,15 @@ Sub UpdateDashboardTables(wb As Workbook)
             .Interior.Color = RGB(255, 235, 156): .Font.Color = RGB(156, 101, 0)
         End With
     End If
-    
+
     Dim rP As Long: rP = 13
-    ' Pre-Format array text to suppress buggy background Excel numeric handling
     wsDash.Range("A13:A100").NumberFormat = "@"
     For Each k In dictPenalties.Keys
         wsDash.Cells(rP, "A").Value = k
         wsDash.Cells(rP, "B").Value = dictPenalties(k)
         rP = rP + 1
     Next k
-    
+
     If rP > 14 Then
         Dim sortRngP As Range
         Set sortRngP = wsDash.Range("A13:B" & rP - 1)
@@ -1539,7 +1738,7 @@ Sub UpdateDashboardTables(wb As Workbook)
             .Apply
         End With
     End If
-    
+
     If rP > 13 Then
         Dim pCell As Range
         For Each pCell In wsDash.Range("A13:A" & rP - 1)
@@ -1547,12 +1746,69 @@ Sub UpdateDashboardTables(wb As Workbook)
             pCell.Errors(xlNumberAsText).Ignore = True
             On Error GoTo 0
         Next pCell
-        
+
         With wsDash.Range("A13:A" & rP - 1).FormatConditions.Add(Type:=xlCellValue, Operator:=xlEqual, Formula1:="=""0%""")
             .Interior.Color = RGB(198, 239, 206): .Font.Color = RGB(0, 97, 0)
         End With
     End If
-    
+
+    ' Write Pie Data (Shifted Right to Column P & Q)
+    Dim rK As Long: rK = 4
+    For Each k In dictLanePie.Keys
+        wsDash.Cells(rK, "P").Value = k
+        wsDash.Cells(rK, "Q").Value = dictLanePie(k)
+        rK = rK + 1
+    Next k
+
+    If rK > 5 Then
+        Dim sortRngK As Range
+        Set sortRngK = wsDash.Range("P3:Q" & rK - 1)
+        With wsDash.Sort
+            .SortFields.Clear
+            .SortFields.Add key:=wsDash.Range("Q4:Q" & rK - 1), SortOn:=xlSortOnValues, Order:=xlDescending, DataOption:=xlSortNormal
+            .SetRange sortRngK
+            .Header = xlYes
+            .Apply
+        End With
+    End If
+
+    ' Write Total Grouped Data (Shifted Right to Column T, U, V, W + Adding Subtotals)
+    Dim rN As Long: rN = 4
+    Dim rT As Long: rT = 4
+    For Each k In dictLaneCol.Keys
+        Dim isFirst As Boolean: isFirst = True
+        Dim cItem As Variant
+        Dim tAmt As Double: tAmt = 0
+        Dim lastC As String: lastC = ""
+
+        For Each cItem In dictLaneCol(k)
+            If isFirst Then
+                wsDash.Cells(rN, "T").Value = k
+                isFirst = False
+            End If
+            wsDash.Cells(rN, "U").Value = cItem(0)
+            wsDash.Cells(rN, "V").Value = cItem(1)
+            wsDash.Cells(rN, "W").Value = cItem(2)
+            tAmt = tAmt + CDbl(cItem(1))
+            lastC = cItem(2)
+            rN = rN + 1
+        Next cItem
+
+        ' Append the Visual Subtotal Block
+        wsDash.Cells(rN, "U").Value = "Total"
+        wsDash.Cells(rN, "V").Value = tAmt
+        wsDash.Cells(rN, "W").Value = lastC
+
+        wsDash.Range(wsDash.Cells(rN, "U"), wsDash.Cells(rN, "W")).Font.Bold = True
+        rN = rN + 2 ' Gap row between blocks
+
+        ' Silently populate background summary table (Y & Z) to serve the Column Chart
+        wsDash.Cells(rT, "Y").Value = k
+        wsDash.Cells(rT, "Z").Value = tAmt
+        rT = rT + 1
+    Next k
+
+    ' Target Existing Charts for Synced Updates
     Dim cho As ChartObject
     On Error Resume Next
     Set cho = wsDash.ChartObjects("DelayCodesPieChart")
@@ -1565,7 +1821,7 @@ Sub UpdateDashboardTables(wb As Workbook)
             cho.Visible = msoFalse
         End If
     End If
-    
+
     Dim cho4 As ChartObject
     On Error Resume Next
     Set cho4 = wsDash.ChartObjects("TATPenaltyPieChart")
@@ -1584,11 +1840,68 @@ Sub UpdateDashboardTables(wb As Workbook)
             cho4.Visible = msoFalse
         End If
     End If
+
+    Dim cho5 As ChartObject
+    On Error Resume Next
+    Set cho5 = wsDash.ChartObjects("LaneKeyPieChart")
+    On Error GoTo 0
+    If Not cho5 Is Nothing Then
+        If rK > 4 Then
+            cho5.Chart.SetSourceData Source:=wsDash.Range("P3:Q" & (rK - 1)), PlotBy:=xlColumns
+            cho5.Visible = msoTrue
+        Else
+            cho5.Visible = msoFalse
+        End If
+    End If
+
+    Dim cho6 As ChartObject
+    On Error Resume Next
+    Set cho6 = wsDash.ChartObjects("TotalPenaltyColumnChart")
+    On Error GoTo 0
+    If Not cho6 Is Nothing Then
+        If rT > 4 Then
+            cho6.Chart.SetSourceData Source:=wsDash.Range("Y3:Z" & (rT - 1)), PlotBy:=xlColumns
+            cho6.Visible = msoTrue
+        Else
+            cho6.Visible = msoFalse
+        End If
+    End If
 End Sub
 
 ' ==============================================================
 ' HELPER FUNCTIONS
 ' ==============================================================
+Function ExtractNumeric(ByVal rawVal As Variant) As Variant
+    If IsEmpty(rawVal) Or IsNull(rawVal) Then
+        ExtractNumeric = ""
+        Exit Function
+    End If
+    If IsNumeric(rawVal) Then
+        ExtractNumeric = CDbl(rawVal)
+        Exit Function
+    End If
+
+    Dim strVal As String, i As Integer, c As String
+    Dim numStr As String, hasDot As Boolean
+    strVal = Trim(CStr(rawVal))
+
+    For i = 1 To Len(strVal)
+        c = Mid(strVal, i, 1)
+        If c Like "[0-9]" Then
+            numStr = numStr & c
+        ElseIf c = "." And Not hasDot Then
+            numStr = numStr & c
+            hasDot = True
+        End If
+    Next i
+
+    If numStr <> "" And numStr <> "." Then
+        ExtractNumeric = CDbl(numStr)
+    Else
+        ExtractNumeric = ""
+    End If
+End Function
+
 Function OpenWorkbookSafely(filePath As String) As Workbook
     Dim wb As Workbook, fileName As String
     fileName = Mid(filePath, InStrRev(filePath, "\") + 1)
@@ -1753,30 +2066,25 @@ End Function
 Sub ToggleKPIFilter()
     Dim wb As Workbook: Set wb = ActiveWorkbook
     Dim wsData As Worksheet, wsDash As Worksheet
-    
+
     On Error Resume Next
     Set wsData = wb.Sheets("Delay Data")
     Set wsDash = wb.Sheets("Delay Dashboard")
     On Error GoTo 0
     If wsData Is Nothing Then Exit Sub
-
     Dim toggleCell As Range
     On Error Resume Next
     Set toggleCell = wb.Names("ToggleKPI").RefersToRange
     On Error GoTo 0
     If toggleCell Is Nothing Then Exit Sub
-
     Application.ScreenUpdating = False
-
     toggleCell.Value = Not toggleCell.Value
     Dim isListed As Boolean: isListed = toggleCell.Value
-
     Dim shpData As Shape, shpDash As Shape
     On Error Resume Next
     Set shpData = wsData.Shapes("btnKPI")
     Set shpDash = wsDash.Shapes("btnKPI")
     On Error GoTo 0
-
     Dim btnText As String, bgColor As Long, fontColor As Long
     If isListed Then
         btnText = "Delay in KPI Only: Listed"
@@ -1787,7 +2095,6 @@ Sub ToggleKPIFilter()
         bgColor = RGB(255, 199, 206)
         fontColor = RGB(156, 0, 6)
     End If
-
     If Not shpData Is Nothing Then
         shpData.TextFrame.Characters.Text = btnText
         shpData.Fill.ForeColor.RGB = bgColor
@@ -1798,7 +2105,6 @@ Sub ToggleKPIFilter()
         shpDash.Fill.ForeColor.RGB = bgColor
         shpDash.TextFrame.Characters.Font.Color = fontColor
     End If
-
     Application.Calculate
     ApplyDelayFilters wsData
     UpdateDashboardTables wb
@@ -1808,30 +2114,25 @@ End Sub
 Sub ToggleSCFilter()
     Dim wb As Workbook: Set wb = ActiveWorkbook
     Dim wsData As Worksheet, wsDash As Worksheet
-    
+
     On Error Resume Next
     Set wsData = wb.Sheets("Delay Data")
     Set wsDash = wb.Sheets("Delay Dashboard")
     On Error GoTo 0
     If wsData Is Nothing Then Exit Sub
-
     Dim toggleCell As Range
     On Error Resume Next
     Set toggleCell = wb.Names("ToggleSC").RefersToRange
     On Error GoTo 0
     If toggleCell Is Nothing Then Exit Sub
-
     Application.ScreenUpdating = False
-
     toggleCell.Value = Not toggleCell.Value
     Dim isListed As Boolean: isListed = toggleCell.Value
-
     Dim shpData As Shape, shpDash As Shape
     On Error Resume Next
     Set shpData = wsData.Shapes("btnSC")
     Set shpDash = wsDash.Shapes("btnSC")
     On Error GoTo 0
-
     Dim btnText As String, bgColor As Long, fontColor As Long
     If isListed Then
         btnText = "Start Clock Discrepancies: Listed"
@@ -1842,7 +2143,6 @@ Sub ToggleSCFilter()
         bgColor = RGB(255, 199, 206)
         fontColor = RGB(156, 0, 6)
     End If
-
     If Not shpData Is Nothing Then
         shpData.TextFrame.Characters.Text = btnText
         shpData.Fill.ForeColor.RGB = bgColor
@@ -1853,7 +2153,6 @@ Sub ToggleSCFilter()
         shpDash.Fill.ForeColor.RGB = bgColor
         shpDash.TextFrame.Characters.Font.Color = fontColor
     End If
-
     Application.Calculate
     ApplyDelayFilters wsData
     UpdateDashboardTables wb
@@ -1863,30 +2162,25 @@ End Sub
 Sub TogglePODFilter()
     Dim wb As Workbook: Set wb = ActiveWorkbook
     Dim wsData As Worksheet, wsDash As Worksheet
-    
+
     On Error Resume Next
     Set wsData = wb.Sheets("Delay Data")
     Set wsDash = wb.Sheets("Delay Dashboard")
     On Error GoTo 0
     If wsData Is Nothing Then Exit Sub
-
     Dim toggleCell As Range
     On Error Resume Next
     Set toggleCell = wb.Names("TogglePOD").RefersToRange
     On Error GoTo 0
     If toggleCell Is Nothing Then Exit Sub
-
     Application.ScreenUpdating = False
-
     toggleCell.Value = Not toggleCell.Value
     Dim isListed As Boolean: isListed = toggleCell.Value
-
     Dim shpData As Shape, shpDash As Shape
     On Error Resume Next
     Set shpData = wsData.Shapes("btnPOD")
     Set shpDash = wsDash.Shapes("btnPOD")
     On Error GoTo 0
-
     Dim btnText As String, bgColor As Long, fontColor As Long
     If isListed Then
         btnText = "POD Discrepancies: Listed"
@@ -1897,7 +2191,6 @@ Sub TogglePODFilter()
         bgColor = RGB(255, 199, 206)
         fontColor = RGB(156, 0, 6)
     End If
-
     If Not shpData Is Nothing Then
         shpData.TextFrame.Characters.Text = btnText
         shpData.Fill.ForeColor.RGB = bgColor
@@ -1908,7 +2201,6 @@ Sub TogglePODFilter()
         shpDash.Fill.ForeColor.RGB = bgColor
         shpDash.TextFrame.Characters.Font.Color = fontColor
     End If
-
     Application.Calculate
     ApplyDelayFilters wsData
     UpdateDashboardTables wb
@@ -1926,3 +2218,4 @@ Sub ApplyDelayFilters(ws As Worksheet)
         lo.Range.AutoFilter Field:=visIdx, Criteria1:="1"
     End If
 End Sub
+
