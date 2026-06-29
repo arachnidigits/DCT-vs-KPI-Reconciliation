@@ -94,13 +94,14 @@ Sub CompareShipmentData()
     Set dictDestMap = CreateObject("Scripting.Dictionary")
     dictDestMap.CompareMode = vbTextCompare
 
-    Dim lrDest As Long, r As Long, arrDest As Variant
+    Dim lrDest As Long, r As Long, arrDest As Variant, rawKey As String
     lrDest = wsDestMap.Cells(wsDestMap.Rows.Count, "A").End(xlUp).Row
     If lrDest >= 2 Then
         arrDest = wsDestMap.Range("A2:B" & lrDest).Value2
         For r = 1 To UBound(arrDest, 1)
-            If Trim(CStr(arrDest(r, 1))) <> "" Then
-                dictDestMap(LCase(Trim(CStr(arrDest(r, 1))))) = Trim(CStr(arrDest(r, 2)))
+            rawKey = Trim(Replace(CStr(arrDest(r, 1)), Chr(160), ""))
+            If rawKey <> "" Then
+                dictDestMap(LCase(rawKey)) = Trim(CStr(arrDest(r, 2)))
             End If
         Next r
     End If
@@ -114,8 +115,9 @@ Sub CompareShipmentData()
     If lrCountry >= 2 Then
         arrCountry = wsCountryMap.Range("A2:B" & lrCountry).Value2
         For r = 1 To UBound(arrCountry, 1)
-            If Trim(CStr(arrCountry(r, 1))) <> "" Then
-                dictCountryMap(LCase(Trim(CStr(arrCountry(r, 1))))) = Trim(CStr(arrCountry(r, 2)))
+            rawKey = Trim(Replace(CStr(arrCountry(r, 1)), Chr(160), ""))
+            If rawKey <> "" Then
+                dictCountryMap(LCase(rawKey)) = Trim(CStr(arrCountry(r, 2)))
             End If
         Next r
     End If
@@ -126,7 +128,18 @@ Sub CompareShipmentData()
     dictRateCard.CompareMode = vbTextCompare
     dictOrigRegs.CompareMode = vbTextCompare
 
+    ' --- NEW/UPDATED: Added c_rcUnit declaration ---
+    Dim c_rcLSP As Long, c_rcMode As Long, c_rcUnit As Long
     Dim c_rcCountry As Long, c_rcOrigReg As Long, c_rcDestReg As Long, c_rcSvc As Long, c_rcDays As Long, c_rcRate As Long, c_rcCurr As Long
+    
+    ' Fetch the new LSP and Mode columns
+    c_rcLSP = FindExactHeaderCol(wsRC, "LSP", 3)
+    c_rcMode = FindExactHeaderCol(wsRC, "Mode", 3)
+    
+    ' --- NEW/UPDATED: Dynamically find the Unit/Equipment Type column ---
+    c_rcUnit = FindExactHeaderCol(wsRC, "21 Unit / Equipment Type", 3)
+    If c_rcUnit = 0 Then c_rcUnit = FindExactHeaderCol(wsRC, "Unit / Equipment Type", 3)
+    
     c_rcCountry = FindExactHeaderCol(wsRC, "1 Origin Country [ISO country code]", 3)
     c_rcOrigReg = FindExactHeaderCol(wsRC, "2 Place/Zone of Origin", 3)
     c_rcDestReg = FindExactHeaderCol(wsRC, "8 Place/Zone of Destination", 3)
@@ -150,10 +163,19 @@ Sub CompareShipmentData()
 
     Dim lrRC As Long
     lrRC = wsRC.Cells(wsRC.Rows.Count, c_rcCountry).End(xlUp).Row
-    Dim rcCountry As String, rcOrig As String, rcDest As String, rcSvc As String, rcDays As Variant, rcRate As Variant, rcCurr As String
+    Dim rcLSP As String, rcMode As String, rcCountry As String, rcOrig As String, rcDest As String
+    
+    ' --- NEW/UPDATED: Added rcUnit variable ---
+    Dim rcSvc As String, rcDays As Variant, rcRate As Variant, rcCurr As String, rcUnit As String
     Dim laneKey As String
 
     For r = 2 To lrRC
+        If c_rcLSP > 0 Then rcLSP = Trim(CStr(wsRC.Cells(r, c_rcLSP).Value2)) Else rcLSP = ""
+        If c_rcMode > 0 Then rcMode = Trim(CStr(wsRC.Cells(r, c_rcMode).Value2)) Else rcMode = ""
+        
+        ' --- NEW/UPDATED: Extract Unit/Equipment type safely ---
+        If c_rcUnit > 0 Then rcUnit = Trim(CStr(wsRC.Cells(r, c_rcUnit).Value2)) Else rcUnit = ""
+        
         rcCountry = Trim(CStr(wsRC.Cells(r, c_rcCountry).Value2))
         rcOrig = Trim(CStr(wsRC.Cells(r, c_rcOrigReg).Value2))
         rcDest = Trim(CStr(wsRC.Cells(r, c_rcDestReg).Value2))
@@ -172,8 +194,11 @@ Sub CompareShipmentData()
             Next v
             If Not exists Then col.Add rcOrig
 
-            laneKey = UCase(rcCountry) & "|" & UCase(rcOrig) & "|" & UCase(rcDest) & "|" & CleanSvc(rcSvc)
-            dictRateCard(laneKey) = Array(rcDays, rcRate, rcCurr)
+            ' Generated Rate Card Lane Key now includes LSP and Mode
+            laneKey = UCase(rcLSP) & "|" & UCase(rcMode) & "|" & UCase(rcCountry) & "|" & UCase(rcOrig) & "|" & UCase(rcDest) & "|" & CleanSvc(rcSvc)
+            
+            ' --- NEW/UPDATED: Push the extracted Unit to the RateCard array dictionary ---
+            dictRateCard(laneKey) = Array(rcDays, rcRate, rcCurr, rcUnit)
         End If
     Next r
     wbRateCard.Close False
@@ -225,9 +250,12 @@ Sub CompareShipmentData()
     Dim c_dctHAWB As Long, c_dctPOD As Long, c_dctSVC As Long, c_dctAPD As Long
     Dim c_dctSC As Long, c_dctATD As Long, c_dctATA As Long, c_dctTransit As Long, c_dctHOB As Long
 
+    ' --- NEW/UPDATED: Added volume and container variables to finding script ---
+    Dim c_kpiFF As Long, c_kpiMode As Long
     Dim c_kpiHAWB As Long, c_kpiPOD As Long, c_kpiSVC As Long, c_kpiAPD As Long
     Dim c_kpiSC As Long, c_kpiATD As Long, c_kpiATA As Long, c_kpiTransit As Long, c_kpiDCode As Long
     Dim c_kpiCountry As Long, c_kpiPostCode As Long, c_kpiDestCity As Long, c_kpiOnTime As Long, c_kpiHOB As Long, c_kpiWeight As Long
+    Dim c_kpiVol As Long, c_kpiTEU As Long, c_kpiContType As Long
 
     c_dctHAWB = FindSmartHeaderCol(wsDCT, "HAWB", 2, False)
     c_dctSVC = FindSmartHeaderCol(wsDCT, "SVC", 2, False)
@@ -239,6 +267,9 @@ Sub CompareShipmentData()
     c_dctPOD = FindSmartHeaderCol(wsDCT, "POD", 2, True)
     c_dctTransit = FindSmartHeaderCol(wsDCT, "TRANSIT", 2, False)
     c_dctHOB = FindExactHeaderCol(wsDCT, "Handover to Broker Date", 2)
+
+    c_kpiFF = FindExactHeaderCol(wsKPI, "Freight Forwarder", 6)
+    c_kpiMode = FindExactHeaderCol(wsKPI, "Transportation Method", 6)
 
     c_kpiHAWB = FindSmartHeaderCol(wsKPI, "HAWB", 6, False)
     c_kpiSVC = FindSmartHeaderCol(wsKPI, "SVC", 6, False)
@@ -257,6 +288,11 @@ Sub CompareShipmentData()
     c_kpiCountry = FindExactHeaderCol(wsKPI, "Origin Country", 6)
     c_kpiPostCode = FindExactHeaderCol(wsKPI, "Origin Post Code", 6)
     c_kpiDestCity = FindExactHeaderCol(wsKPI, "Destination City", 6)
+    
+    ' --- NEW/UPDATED: Map the new KPI columns dynamically ---
+    c_kpiVol = FindExactHeaderCol(wsKPI, "Volume (CBM)", 6)
+    c_kpiTEU = FindExactHeaderCol(wsKPI, "TEU Count (Ocean)", 6)
+    c_kpiContType = FindExactHeaderCol(wsKPI, "Container Type (Ocean)", 6)
 
     c_kpiWeight = 0
     For rCheck = 1 To 7
@@ -379,6 +415,8 @@ Sub CompareShipmentData()
 
     ' 8. Process KPI Data
     Dim kCountry As String, kPost As String, kCity As String, kOnTime As String, kpiWeight As Variant
+    ' --- NEW/UPDATED: Added Variables for Volume/TEU/ContainerType extraction ---
+    Dim kFF As String, kMode As String, kVol As Variant, kTEU As Variant, kContType As String
 
     For i = 6 To UBound(arrKPI, 1)
         hawb = Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiHAWB)))
@@ -417,10 +455,20 @@ Sub CompareShipmentData()
                 End If
                 If c_kpiDestCity > 0 Then kCity = Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiDestCity)))
                 If c_kpiOnTime > 0 Then kOnTime = UCase(Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiOnTime))))
-
                 If c_kpiWeight > 0 Then kpiWeight = GetSafeArrayVal(arrKPI, i, c_kpiWeight)
 
-                dictKPI(hawb) = Array(svc, apd, sc, podDate, transitTime, dCode, tempSC, atd, ata, kCountry, kPost, kCity, kOnTime, tempHOB, kpiWeight)
+                kFF = "": kMode = ""
+                If c_kpiFF > 0 Then kFF = Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiFF)))
+                If c_kpiMode > 0 Then kMode = Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiMode)))
+
+                ' --- NEW/UPDATED: Extract Vol, TEU, and ContType to variables ---
+                kVol = "": kTEU = "": kContType = ""
+                If c_kpiVol > 0 Then kVol = GetSafeArrayVal(arrKPI, i, c_kpiVol)
+                If c_kpiTEU > 0 Then kTEU = GetSafeArrayVal(arrKPI, i, c_kpiTEU)
+                If c_kpiContType > 0 Then kContType = Trim(CStr(GetSafeArrayVal(arrKPI, i, c_kpiContType)))
+
+                ' --- NEW/UPDATED: Array expanded to 20 indexes to hold the 3 new metric columns ---
+                dictKPI(hawb) = Array(svc, apd, sc, podDate, transitTime, dCode, tempSC, atd, ata, kCountry, kPost, kCity, kOnTime, tempHOB, kpiWeight, kFF, kMode, kVol, kTEU, kContType)
             End If
         End If
     Next i
@@ -461,6 +509,8 @@ Sub CompareShipmentData()
     Dim apiPODDate As Date, kpiPODDate As Date, kpiDCode As String
     Dim apiHOBDate As Date, kpiHOBDate As Date
     Dim apiSCDate As Date, kWeight As Variant
+    ' --- NEW/UPDATED: Declare container/vol metric variables for loop ---
+    Dim aVol As Variant, aTEU As Variant, aContType As String
     Dim isApiDelay As Boolean, isKpiDelay As Boolean
     Dim apiCompareDate As Date, kpiCompareDate As Date
     Dim apiDateType As String, kpiDateType As String
@@ -493,6 +543,13 @@ Sub CompareShipmentData()
             kCountryName = kpiVals(9): kPostName = kpiVals(10): kCityName = kpiVals(11): kOnTimeFlag = kpiVals(12)
             kpiHOBDate = kpiVals(13)
             kWeight = kpiVals(14)
+            kFF = kpiVals(15)
+            kMode = kpiVals(16)
+            
+            ' --- NEW/UPDATED: Pull the new volume/TEU details out of the dictionary ---
+            aVol = kpiVals(17)
+            aTEU = kpiVals(18)
+            aContType = kpiVals(19)
 
             If kpiPODDate > 0 Then
                 kpiCompareDate = kpiPODDate: kpiDateType = "POD"
@@ -574,28 +631,37 @@ Sub CompareShipmentData()
             End If
 
             Dim derivedCountryCode As String, derivedDest As String, derivedOrig As String
+            Dim cleanKCountry As String, cleanKCity As String
+            
+            cleanKCountry = Trim(Replace(kCountryName, Chr(160), ""))
+            cleanKCity = Trim(Replace(kCityName, Chr(160), ""))
 
-            If Len(kCountryName) = 2 Then
-                derivedCountryCode = UCase(kCountryName)
-            ElseIf dictCountryMap.exists(LCase(kCountryName)) Then
-                derivedCountryCode = dictCountryMap(LCase(kCountryName))
+            If Len(cleanKCountry) = 2 Then
+                derivedCountryCode = UCase(cleanKCountry)
+            ElseIf dictCountryMap.exists(LCase(cleanKCountry)) Then
+                derivedCountryCode = dictCountryMap(LCase(cleanKCountry))
             Else
                 derivedCountryCode = "Unmapped Country"
             End If
 
             derivedDest = "Unmapped City"
-            If dictDestMap.exists(LCase(kCityName)) Then derivedDest = dictDestMap(LCase(kCityName))
+            If dictDestMap.exists(LCase(cleanKCity)) Then derivedDest = dictDestMap(LCase(cleanKCity))
 
             derivedOrig = GetOriginRegion(derivedCountryCode, kPostName, dictOrigRegs)
-            laneKey = UCase(derivedCountryCode) & "|" & UCase(derivedOrig) & "|" & UCase(derivedDest) & "|" & CleanSvc(kpiSvc)
+            
+            ' Include FF and Mode in the Lane Key search to ensure exact provider mapping
+            laneKey = UCase(kFF) & "|" & UCase(kMode) & "|" & UCase(derivedCountryCode) & "|" & UCase(derivedOrig) & "|" & UCase(derivedDest) & "|" & CleanSvc(kpiSvc)
 
-            Dim contractedDays As Variant, contractedRate As Variant, contractedCurr As String, contractedDate As Variant
+            ' --- NEW/UPDATED: Modified Rate Card pull down to include unit ---
+            Dim contractedDays As Variant, contractedRate As Variant, contractedCurr As String, contractedDate As Variant, contractedUnit As String
             contractedDate = Empty
 
             If dictRateCard.exists(laneKey) Then
                 contractedDays = dictRateCard(laneKey)(0)
                 contractedRate = dictRateCard(laneKey)(1)
                 contractedCurr = dictRateCard(laneKey)(2)
+                contractedUnit = dictRateCard(laneKey)(3) ' Extract Unit
+                
                 If IsNumeric(contractedDays) And apiSCDate > 0 Then
                     contractedDate = CDbl(apiSCDate) + CDbl(contractedDays) - 1
                 End If
@@ -603,20 +669,49 @@ Sub CompareShipmentData()
                 contractedDays = "Lane Not Available"
                 contractedRate = 0
                 contractedCurr = ""
+                contractedUnit = ""
             End If
 
-            Dim cleanRate As Variant, cleanWeight As Variant
+            Dim cleanRate As Variant
             cleanRate = ExtractNumeric(contractedRate)
-            cleanWeight = ExtractNumeric(kWeight)
+            
+            ' --- NEW/UPDATED: The Dynamic Penalty Determination Logic Block ---
+            Dim multVal As Variant
+            multVal = ""
+            Dim uType As String
+            uType = LCase(contractedUnit)
+            
+            If InStr(1, uType, "kg") > 0 Or InStr(1, uType, "kilo") > 0 Then
+                multVal = ExtractNumeric(kWeight)
+                
+            ElseIf InStr(1, uType, "cbm") > 0 Or InStr(1, uType, "vol") > 0 Then
+                multVal = ExtractNumeric(aVol)
+                
+            ElseIf InStr(1, uType, "feu") > 0 Or InStr(1, uType, "teu") > 0 Or InStr(1, uType, "cont") > 0 Then
+                Dim cleanTEU As Variant
+                cleanTEU = ExtractNumeric(aTEU)
+                
+                ' Step 1: Valid number in TEU Count
+                If IsNumeric(cleanTEU) Then
+                    If CDbl(cleanTEU) > 0 Then multVal = CDbl(cleanTEU)
+                End If
+                
+                ' Step 2: Fall back to Container Type split array count
+                If multVal = "" And Trim(aContType) <> "" Then
+                    multVal = UBound(Split(aContType, ";")) + 1
+                End If
+            End If
 
             Dim baseAmt As Variant, payableAmt As Variant, penaltyAmt As Variant
             baseAmt = ""
             payableAmt = ""
             penaltyAmt = ""
 
-            If IsNumeric(cleanWeight) And IsNumeric(cleanRate) Then
-                baseAmt = CDbl(cleanWeight) * CDbl(cleanRate)
+            ' Apply dynamic multiplier math instead of hardcoded chargeable weight
+            If IsNumeric(multVal) And IsNumeric(cleanRate) Then
+                baseAmt = CDbl(multVal) * CDbl(cleanRate)
             End If
+            ' --- END NEW LOGIC BLOCK ---
 
             isApiDelay = False: isKpiDelay = False
             If Not IsEmpty(contractedDate) Then
@@ -680,8 +775,6 @@ Sub CompareShipmentData()
                         svcOrdered = "Fast"
                     ElseIf InStr(1, UCase(apiSvc), "STANDARD") > 0 Then
                         svcOrdered = "Standard"
-                    Else
-                        svcOrdered = "Unknown"
                     End If
 
                     payableSvc = svcOrdered
@@ -790,7 +883,8 @@ Sub CompareShipmentData()
     ' 9b. COMPILE LANE MAPPING AUDIT DATA
     ' ==========================================
     Dim outAudit() As Variant
-    ReDim outAudit(1 To dictKPI.Count + 1, 1 To 10)
+    ' Expanded array to handle 12 columns (adding FF and Mode)
+    ReDim outAudit(1 To dictKPI.Count + 1, 1 To 12)
     Dim auditRow As Long: auditRow = 1
     Dim kKey As Variant, kVals As Variant
 
@@ -798,19 +892,26 @@ Sub CompareShipmentData()
         kVals = dictKPI(kKey)
 
         Dim aCountryName As String, aPostName As String, aCityName As String, aSvc As String
+        Dim aFF As String, aMode As String
+        
         aSvc = kVals(0): aCountryName = kVals(9): aPostName = kVals(10): aCityName = kVals(11)
+        aFF = kVals(15): aMode = kVals(16)
 
         Dim aDerivedCountry As String, aDerivedDest As String, aDerivedOrig As String
-        If Len(aCountryName) = 2 Then
-            aDerivedCountry = UCase(aCountryName)
-        ElseIf dictCountryMap.exists(LCase(aCountryName)) Then
-            aDerivedCountry = dictCountryMap(LCase(aCountryName))
+        Dim cleanACountry As String, cleanACity As String
+        cleanACountry = Trim(Replace(aCountryName, Chr(160), ""))
+        cleanACity = Trim(Replace(aCityName, Chr(160), ""))
+
+        If Len(cleanACountry) = 2 Then
+            aDerivedCountry = UCase(cleanACountry)
+        ElseIf dictCountryMap.exists(LCase(cleanACountry)) Then
+            aDerivedCountry = dictCountryMap(LCase(cleanACountry))
         Else
             aDerivedCountry = "Unmapped Country"
         End If
 
-        If dictDestMap.exists(LCase(aCityName)) Then
-            aDerivedDest = dictDestMap(LCase(aCityName))
+        If dictDestMap.exists(LCase(cleanACity)) Then
+            aDerivedDest = dictDestMap(LCase(cleanACity))
         Else
             aDerivedDest = "Unmapped City"
         End If
@@ -818,7 +919,7 @@ Sub CompareShipmentData()
         aDerivedOrig = GetOriginRegion(aDerivedCountry, aPostName, dictOrigRegs)
 
         Dim aLaneKey As String
-        aLaneKey = UCase(aDerivedCountry) & "|" & UCase(aDerivedOrig) & "|" & UCase(aDerivedDest) & "|" & CleanSvc(aSvc)
+        aLaneKey = UCase(aFF) & "|" & UCase(aMode) & "|" & UCase(aDerivedCountry) & "|" & UCase(aDerivedOrig) & "|" & UCase(aDerivedDest) & "|" & CleanSvc(aSvc)
 
         Dim aContractedDays As Variant
         If dictRateCard.exists(aLaneKey) Then
@@ -829,14 +930,16 @@ Sub CompareShipmentData()
 
         outAudit(auditRow, 1) = kKey
         outAudit(auditRow, 2) = aContractedDays
-        outAudit(auditRow, 3) = aCountryName
-        outAudit(auditRow, 4) = aDerivedCountry
-        outAudit(auditRow, 5) = aPostName
-        outAudit(auditRow, 6) = aDerivedOrig
-        outAudit(auditRow, 7) = aCityName
-        outAudit(auditRow, 8) = aDerivedDest
-        outAudit(auditRow, 9) = aSvc
-        outAudit(auditRow, 10) = aLaneKey
+        outAudit(auditRow, 3) = aFF
+        outAudit(auditRow, 4) = aMode
+        outAudit(auditRow, 5) = aCountryName
+        outAudit(auditRow, 6) = aDerivedCountry
+        outAudit(auditRow, 7) = aPostName
+        outAudit(auditRow, 8) = aDerivedOrig
+        outAudit(auditRow, 9) = aCityName
+        outAudit(auditRow, 10) = aDerivedDest
+        outAudit(auditRow, 11) = aSvc
+        outAudit(auditRow, 12) = aLaneKey
 
         auditRow = auditRow + 1
     Next kKey
@@ -1201,27 +1304,21 @@ Sub CompareShipmentData()
             .Interior.ThemeColor = xlThemeColorAccent1: .Interior.TintAndShade = 0.6: .Font.Bold = True
         End With
 
-        ' -------------------------------------------------------------
-        ' NEW CHART DATA HEADERS (Shifted Right)
-        ' -------------------------------------------------------------
         wsDashboard.Range("P3:Q3").Value = Array("Lane Key (Penalty)", "Count")
         With wsDashboard.Range("P3:Q3")
             .Interior.ThemeColor = xlThemeColorAccent1: .Interior.TintAndShade = 0.6: .Font.Bold = True
         End With
         
-        ' SHIFTED: Table now starts at column T
         wsDashboard.Range("T3:W3").Value = Array("Lane Key", "HBL Number", "Penalty Amt", "Currency")
         With wsDashboard.Range("T3:W3")
             .Interior.ThemeColor = xlThemeColorAccent1: .Interior.TintAndShade = 0.6: .Font.Bold = True
         End With
         
-        ' SHIFTED: Background Summary Chart Source Data Table now starts at column Y
         wsDashboard.Range("Y3:Z3").Value = Array("Lane Key", "Total Penalty")
         With wsDashboard.Range("Y3:Z3")
             .Interior.ThemeColor = xlThemeColorAccent1: .Interior.TintAndShade = 0.6: .Font.Bold = True
         End With
 
-        ' Process and print grouped stats and sources
         UpdateDashboardTables wbOut
 
         Dim rCode As Long, rPenalty As Long, rLanePie As Long, rLaneTotal As Long
@@ -1232,13 +1329,11 @@ Sub CompareShipmentData()
         
         wsDashboard.Columns("A:Z").AutoFit
         
-        ' Apply Gap Widths
         wsDashboard.Columns("O:O").ColumnWidth = 3
         wsDashboard.Columns("R:R").ColumnWidth = 3
         wsDashboard.Columns("S:S").ColumnWidth = 3
         wsDashboard.Columns("X:X").ColumnWidth = 3
         
-        ' Update Number formats for new columns
         wsDashboard.Columns("V:V").NumberFormat = "#,##0.00"
         wsDashboard.Columns("Z:Z").NumberFormat = "#,##0.00"
 
@@ -1335,9 +1430,6 @@ Sub CompareShipmentData()
             cho4.ShapeRange.Line.Visible = msoFalse: cho4.ShapeRange.Fill.Solid: cho4.ShapeRange.Fill.ForeColor.RGB = RGB(255, 255, 255)
         End If
 
-        ' -------------------------------------------------------------
-        ' NEW CHARTS (Pie Chart Lane Mapping)
-        ' -------------------------------------------------------------
         If rLanePie > 4 Then
             Dim cho5 As ChartObject
             Set cho5 = wsDashboard.ChartObjects.Add(Left:=15 + (chartWidth * 4) + (chartGap * 4), Top:=chartsTop, Width:=chartWidth, Height:=chartHeight)
@@ -1359,9 +1451,6 @@ Sub CompareShipmentData()
             cho5.ShapeRange.Line.Visible = msoFalse: cho5.ShapeRange.Fill.Solid: cho5.ShapeRange.Fill.ForeColor.RGB = RGB(255, 255, 255)
         End If
 
-        ' -------------------------------------------------------------
-        ' NEW CHART: Total Penalty Amount vs Lane Key (Column)
-        ' -------------------------------------------------------------
         If rLaneTotal > 4 Then
             Dim cho6 As ChartObject
             Dim numPies As Integer
@@ -1492,18 +1581,18 @@ Sub CompareShipmentData()
     wsAuditTab.Name = "Lane Mapping Audit"
     wsAuditTab.Cells.Font.Color = vbBlack
 
-    wsAuditTab.Range("A1:J1").Value = Array("HAWB / HBL Number", "Contracted Transit Days", "KPI Origin Country Name", "Derived Country Code", "KPI Post Code", "Derived Origin Region", "KPI Destination City", "Derived Destination Region", "KPI Service Level", "Generated Lane Key")
+    wsAuditTab.Range("A1:L1").Value = Array("HAWB / HBL Number", "Contracted Transit Days", "KPI Freight Forwarder", "KPI Transport Mode", "KPI Origin Country Name", "Derived Country Code", "KPI Post Code", "Derived Origin Region", "KPI Destination City", "Derived Destination Region", "KPI Service Level", "Generated Lane Key")
 
-    If auditRow > 1 Then wsAuditTab.Range("A2").Resize(auditRow - 1, 10).Value = outAudit
+    If auditRow > 1 Then wsAuditTab.Range("A2").Resize(auditRow - 1, 12).Value = outAudit
 
-    With wsAuditTab.Range("A1:J1")
+    With wsAuditTab.Range("A1:L1")
         .Interior.ThemeColor = xlThemeColorAccent5
         .Interior.TintAndShade = 0.6
         .Font.Bold = True
     End With
 
     Dim loAudit As ListObject
-    Set loAudit = wsAuditTab.ListObjects.Add(xlSrcRange, wsAuditTab.Range("A1:J" & auditRow), , xlYes)
+    Set loAudit = wsAuditTab.ListObjects.Add(xlSrcRange, wsAuditTab.Range("A1:L" & auditRow), , xlYes)
     loAudit.Name = "TblLaneAudit": loAudit.TableStyle = ""
     wsAuditTab.Cells.HorizontalAlignment = xlLeft
 
@@ -1523,7 +1612,7 @@ Sub CompareShipmentData()
     End If
 
     wsAuditTab.Columns.AutoFit
-    wsAuditTab.Columns("J").ColumnWidth = 50
+    wsAuditTab.Columns("L").ColumnWidth = 50
     wsAuditTab.Activate
     ActiveWindow.SplitRow = 1: ActiveWindow.FreezePanes = True
 
@@ -1916,7 +2005,7 @@ Function FindExactHeaderCol(ws As Worksheet, headerName As String, maxRow As Lon
     Dim r As Long, c As Long
     For r = 1 To maxRow
         For c = 1 To 150
-            If Trim(CStr(ws.Cells(r, c).Value)) = headerName Then
+            If StrComp(Trim(CStr(ws.Cells(r, c).Value)), headerName, vbTextCompare) = 0 Then
                 FindExactHeaderCol = c
                 Exit Function
             End If
@@ -1932,7 +2021,7 @@ Function FindSmartHeaderCol(ws As Worksheet, headerType As String, maxRow As Lon
     Select Case UCase(headerType)
         Case "HAWB": aliases = Array("HBLHAWB", "HAWB", "HBL", "HOUSEBILL", "BILLOFLADING")
         Case "SVC": aliases = Array("SERVICELEVEL", "SVCLEVEL")
-        Case "APD": aliases = Array("ACTUALPICKUPDATEAPD", "ACTUALPICKUPDATE", "ACTUALPICKUP", "PICKUPDATE", "APD")
+        Case "APD": aliases = Array("ACTUALPICKUPDATEAPD", "ACTUALPICKUPDATE", "ACTUALPICKUP", "APD")
         Case "ATD": aliases = Array("ACTUALTIMEOFDEPARTUREATD", "ACTUALTIMEOFDEPARTURE", "ATD", "TIMEOFDEPARTURE")
         Case "ATA": aliases = Array("ACTUALTIMEOFARRIVALATA", "ACTUALTIMEOFARRIVAL", "ATA", "TIMEOFARRIVAL")
         Case "POD": aliases = Array("PROOFOFDELIVERYDATE", "PROOFOFDELIVERY", "POD", "DELIVERYDATE")
@@ -1983,43 +2072,89 @@ NextAlias:
 End Function
 
 Function GetOriginRegion(countryCode As String, postCode As String, dictOrigRegs As Object) As String
-    Dim pcPrefix As Integer: pcPrefix = -1
-    Dim clnPost As String: clnPost = Trim(postCode)
-    If Len(clnPost) >= 2 Then
-        If IsNumeric(Left(clnPost, 2)) Then pcPrefix = CInt(Left(clnPost, 2))
-    End If
+    Dim clnPost As String
+    clnPost = Trim(postCode)
+    
     Dim derivedOrig As String: derivedOrig = ""
     If dictOrigRegs.exists(UCase(Trim(countryCode))) Then
         Dim colRegs As Collection: Set colRegs = dictOrigRegs(UCase(Trim(countryCode)))
+        
+        ' Shortcut: If there is only 1 region for the country, just use it
         If colRegs.Count = 1 Then
             GetOriginRegion = CStr(colRegs(1))
             Exit Function
         End If
+        
         Dim vReg As Variant, regStr As String, insideP As String, bounds() As String
+        Dim bStart As String, bEnd As String
+        Dim extLen As Integer, extStr As String, extVal As Integer
+        
         For Each vReg In colRegs
             regStr = CStr(vReg)
             If InStr(regStr, "(") > 0 And InStr(regStr, ")") > 0 Then
                 insideP = Mid(regStr, InStr(regStr, "(") + 1, InStr(regStr, ")") - InStr(regStr, "(") - 1)
+                
                 If InStr(insideP, "-") > 0 Then
                     bounds = Split(insideP, "-")
-                    If IsNumeric(Trim(bounds(0))) And IsNumeric(Trim(bounds(1))) Then
-                        If pcPrefix >= CInt(Trim(bounds(0))) And pcPrefix <= CInt(Trim(bounds(1))) Then
-                            derivedOrig = regStr: Exit For
+                    bStart = Trim(bounds(0))
+                    bEnd = Trim(bounds(1))
+                    
+                    If IsNumeric(bStart) And IsNumeric(bEnd) Then
+                        ' 1. Check the length based on the starting bound (e.g. 1 digit for 0-5)
+                        extLen = Len(bStart)
+                        If Len(clnPost) >= extLen Then
+                            extStr = Left(clnPost, extLen)
+                            If IsNumeric(extStr) Then
+                                extVal = CInt(extStr)
+                                If extVal >= CInt(bStart) And extVal <= CInt(bEnd) Then
+                                    derivedOrig = regStr: Exit For
+                                End If
+                            End If
+                        End If
+                        
+                        ' 2. Edge Case Check: If bounds have different lengths (e.g. "9-12")
+                        ' Check the length of the upper bound just in case
+                        If Len(bEnd) <> Len(bStart) And derivedOrig = "" Then
+                            extLen = Len(bEnd)
+                            If Len(clnPost) >= extLen Then
+                                extStr = Left(clnPost, extLen)
+                                If IsNumeric(extStr) Then
+                                    extVal = CInt(extStr)
+                                    If extVal >= CInt(bStart) And extVal <= CInt(bEnd) Then
+                                        derivedOrig = regStr: Exit For
+                                    End If
+                                End If
+                            End If
                         End If
                     End If
+                    
                 ElseIf IsNumeric(Trim(insideP)) Then
-                    If pcPrefix = CInt(Trim(insideP)) Then derivedOrig = regStr: Exit For
+                    ' Single exact match logic (e.g., "Paris (75)")
+                    extLen = Len(Trim(insideP))
+                    If Len(clnPost) >= extLen Then
+                        extStr = Left(clnPost, extLen)
+                        If IsNumeric(extStr) Then
+                            If CInt(extStr) = CInt(Trim(insideP)) Then
+                                derivedOrig = regStr: Exit For
+                            End If
+                        End If
+                    End If
                 End If
             End If
         Next vReg
+        
+        ' Fallback 1: If no match, look for a generic region without brackets
         If derivedOrig = "" Then
             For Each vReg In colRegs
                 regStr = CStr(vReg)
                 If InStr(regStr, "(") = 0 Then derivedOrig = regStr: Exit For
             Next vReg
         End If
+        
+        ' Fallback 2: Assign the first available region so it doesn't break
         If derivedOrig = "" And colRegs.Count > 0 Then derivedOrig = CStr(colRegs(1))
     End If
+    
     If derivedOrig = "" Then derivedOrig = "Unmapped Origin"
     GetOriginRegion = derivedOrig
 End Function
@@ -2218,4 +2353,3 @@ Sub ApplyDelayFilters(ws As Worksheet)
         lo.Range.AutoFilter Field:=visIdx, Criteria1:="1"
     End If
 End Sub
-
